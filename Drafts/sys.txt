@@ -1,0 +1,8 @@
+
+APP Compilation:
+
+cd C:/Users/AW25141/Desktop/mini; g++ main.cpp src/*.cpp src/components/*.cpp -o mini.exe -I./src -lgdi32 -lgdiplus -municode -mwindows -static-libgcc -static-libstdc++
+
+DEV Compilation:
+
+cd C:/Users/AW25141/Desktop/mini; g++ main.cpp src/*.cpp src/components/*.cpp -o mini.exe -I./src -lgdi32 -lgdiplus -municode -static-libgcc -static-libstdc++

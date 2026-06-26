@@ -1,0 +1,16 @@
+Master (Engine root)
+│
+├── GameLayer
+│     ├── AssetManager
+│     ├── Animation system
+│     └── (Sprites, Sounds, etc.)
+│
+├── Pet
+│     ├── state machine
+│     ├── behavior logic
+│     └── references animation
+│
+└── Window
+      ├── rendering
+      ├── tray / OS
+      └── input

@@ -1,0 +1,25 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "Build Desktop Pet",
+            "command": "C:/msys64/ucrt64/bin/g++.exe", 
+            "args": [
+                "${workspaceFolder}/main.cpp",
+                "${workspaceFolder}/Master.cpp",
+                "${workspaceFolder}/Window.cpp",
+                "${workspaceFolder}/pet.cpp",
+                "-o",
+                "${workspaceFolder}/mini.exe",
+                "-lgdi32",
+                "-g"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}

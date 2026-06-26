@@ -1,0 +1,10 @@
+Need to make the LINUX Appropriate rendering engine for cross-compatibality
+
+Need to add some kind of secondary programming system for easier object creation (LUA?)
+
+FIX the icon.ICO so its easier to see the app. 
+
+Build a better error/debugging system where the CLI is actually used...
+
+Actor should be updated so that the Pet.cpp/h should basically no longer exist. the Generic Actor object should contain common overrides as well for easier object creation
+
