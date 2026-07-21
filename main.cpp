@@ -29,24 +29,7 @@ int main() {
         if (e.type == WindowEvent::Type::Close) {
             std::cout << "Event: Window Closed!" << std::endl;
         }
-    })
-
-    // Script Engine
-    ScriptEngine scriptEngine;
-    sol::state& lua = scriptEngine.GetState();
-
-    // Example to expose window class to Lua
-    lua.new_usertype<IWindow>("Window",
-        "ShouldClose", &IWindow::ShouldClose,
-        "GetWidth", &IWindow::GetWidth,
-        "GetHeight", &IWindow::GetHeight
-    );
-
-    lua["engineWindow"] = window.get();
-    lua.set_function("SetClearColor", &SetClearColor);
-
-    scriptEngine.LoadScript("scripts/main.lua");
-    scriptEngine.CallFunction("Init");
+    });
 
     auto lastTime = std::chrono::high_resolution_clock::now();
 
@@ -56,8 +39,6 @@ int main() {
         std::chrono::duration<float> deltaDuration = currentTime - lastTime;
         float deltaTime = deltaDuration.count();
         window->PollEvents();
-
-        scriptEngine.CallFunction("Update", deltaTime);
 
         // Swap the front and back buffers
         glClear(GL_COLOR_BUFFER_BIT);

@@ -2,6 +2,8 @@
 #include <iostream>
 #include <vector>
 
+#ifdef __linux__
+
 // You'll need the devkit for X11 if you're recompiling the engine btw...
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -129,3 +131,5 @@ void LinuxWindow::SetIcon(const std::string& filepath) {
     XFlush(m_Display);
     stbi_image_free(data);
 }
+
+#endif

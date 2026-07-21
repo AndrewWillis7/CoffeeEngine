@@ -1,7 +1,7 @@
 CXX = g++
 
 CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -MMD -MP -Isrc -Isrc/external
-LDFLAGS = src/external/liblua.a -lX11 -lGL -ldl -pthread -
+LDFLAGS = src/external/liblua.a -lX11 -lGL -ldl -pthread
 
 TARGET = engine_test
 
