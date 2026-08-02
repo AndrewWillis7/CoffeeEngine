@@ -3,6 +3,9 @@
 #include "Scripting/GraphicsBindings.h"
 #include "Scripting/WindowBindings.h"
 #include "Scripting/Vector2Bindings.h"
+#include "Scripting/RigidBody2DBindings.h"
+#include "Scripting/ShaderBindings.h"
+#include "Scripting/RendererBindings.h"
 
 #include <iostream>
 
@@ -41,6 +44,9 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     GraphicsBindings::Register(m_Lua, context.graphics);
     WindowBindings::Register(m_Lua, context.window);
     Vector2Bindings::Register(m_Lua);
+    RigidBody2DBindings::Register(m_Lua, context.actors);
+    ShaderBindings::Register(m_Lua, context.actors);
+    RendererBindings::Register(m_Lua, context.renderer);
     // Future Actor Bindings
     // Future Sprite Bindings
 

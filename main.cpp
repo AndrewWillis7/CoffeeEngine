@@ -2,6 +2,8 @@
 #include "IGraphicsContext.h"
 #include "Core/ScriptEngine.h"
 #include "Core/EngineContext.h"
+#include "Core/ActorRegistry.h"
+#include "Renderer/Renderer2D.h"
 #include <chrono>
 #include <iostream>
 
@@ -21,9 +23,20 @@ int main() {
     );
     graphicsContext->Init();
 
-    window->SetEventCallback([](const WindowEvent& e){
+    // Shader-based drawing pipeline. Lives outside OS
+    // Must be Initialized after graphics context
+    Renderer2D renderer2D;
+    renderer2D.Init();
+    renderer2D.SetViewportSize(window->GetWidth(), window->GetHeight());
+
+    // Owns Rigidbody and shader creation at runtime
+    ActorRegistry actorRegistry;
+
+    window->SetEventCallback([&renderer2D](const WindowEvent& e){
         if (e.type == WindowEvent::Type::Close) {
             std::cout << "Event: Window Closed!" << std::endl;
+        } else if (e.type == WindowEvent::Type::Resize) {
+            renderer2D.SetViewportSize(e.width, e.height);
         }
     });
 
@@ -31,6 +44,8 @@ int main() {
     EngineContext engineContext;
     engineContext.graphics = graphicsContext.get();
     engineContext.window = window.get();
+    engineContext.renderer = &renderer2D;
+    engineContext.actors = &actorRegistry;
 
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);
@@ -50,6 +65,7 @@ int main() {
         window->PollEvents();
 
         glClear(GL_COLOR_BUFFER_BIT);
+        renderer2D.BeginFrame(deltaTime);
         scriptEngine.Update(deltaTime);
         
         graphicsContext->SwapBuffers();

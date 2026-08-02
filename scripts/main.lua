@@ -1,22 +1,29 @@
-timer = 0.0
-position = Vector2.new(400, 300)
-velocity = Vector2.new(60, 40)
+square = nil
+glow = nil
 
 function Init()
-    print("Engine Initialized");
-    SetClearColor(0.0, 0.0, 1.0)
+    print("Engine Initialized")
+    SetClearColor(0.05, 0.05, 0.08)
+
+    square = RigidBody2D.new(400, 300, 50, 50)
+    square:SetColor(1.0, 1.0, 1.0, 1.0)
+    square:SetVelocity(60, 40)
+    square:SetAngularVelocity(45) -- degrees/sec, same spin rate as before
+
+    glow = Shader.CreateGlow()
+    glow:SetVec3("u_GlowColor", 0.3, 0.8, 1.0)
+    glow:SetFloat("u_GlowIntensity", 1.4)
+    square:SetShader(glow)
 end
 
 function Update(deltaTime)
-    timer = timer + deltaTime
-    local r = (math.sin(timer * 2.0) + 1.0) / 2.0
-    SetClearColor(r, 0.2, 0.4)
+    square:Integrate(deltaTime)
 
-    position = position + velocity * deltaTime
-
-    if position:GetX() > eWindow:GetWidth() or position:GetX() < 0 then
-        velocity = velocity * -1
+    local x, y = square:GetPosition()
+    if x > eWindow:GetWidth() or x < 0 then
+        local vx, vy = square:GetVelocity()
+        square:SetVelocity(-vx, vy)
     end
 
-    DrawDebugQuad(position:GetX(), position:GetY(), 50, 50, timer * 45.0, 1.0, 1.0, 1.0)
+    DrawBody(square)
 end
