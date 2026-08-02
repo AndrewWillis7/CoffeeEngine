@@ -24,4 +24,4 @@ function EngineWindow:SetIcon(filepath) end
 
 --- The engine's window, bound into every script's global scope
 ---@type EngineWindow
-engineWindow = nil
+eWindow = nil

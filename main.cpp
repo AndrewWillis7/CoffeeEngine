@@ -1,6 +1,7 @@
 #include "IWindow.h"
 #include "IGraphicsContext.h"
 #include "Core/ScriptEngine.h"
+#include "Core/EngineContext.h"
 #include <chrono>
 #include <iostream>
 
@@ -27,8 +28,12 @@ int main() {
     });
 
     // Script Stuff
+    EngineContext engineContext;
+    engineContext.graphics = graphicsContext.get();
+    engineContext.window = window.get();
+
     ScriptEngine scriptEngine;
-    scriptEngine.Init("scripts/main.lua", graphicsContext.get(), window.get());
+    scriptEngine.Init("scripts/main.lua", engineContext);
 
     // LOOP STUFF
 
