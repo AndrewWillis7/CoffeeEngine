@@ -46,6 +46,16 @@ void GLXGraphicsContext::Init() {
     // Bind the current context to windo so OpenGL knows where to draw
     glXMakeCurrent(m_Display, m_Window, m_Context);
 
+    m_Width = wa.width;
+    m_Height = wa.height;
+
+    // Screen-Space Projection
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, m_Width, m_Height, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
     XFree(vi);
     std::cout << "OpenGL Context Initialized Successfully (GLX)\n";
 }
@@ -56,4 +66,23 @@ void GLXGraphicsContext::SwapBuffers() {
 
 void GLXGraphicsContext::SetClearColor(float r, float g, float b) {
     glClearColor(r, g, b, 1.0f);
+}
+
+void GLXGraphicsContext::DrawDebugQuad(const Transform2D& transform, const Vector2& size, const Color& color) {
+    Vector2 halfSize = size * 0.5f;
+
+    Vector2 corners[4] = {
+        {-halfSize.x, -halfSize.y},
+        {halfSize.x, -halfSize.y},
+        {halfSize.x, halfSize.y},
+        {-halfSize.x, halfSize.y}
+    };
+
+    glColor4f(color.r, color.g, color.b, color.a);
+    glBegin(GL_QUADS);
+    for (const Vector2& corner : corners) {
+        Vector2 world = transform.position + corner.Rotated(transform.rotation);
+        glVertex2f(world.x, world.y);
+    }
+    glEnd();
 }

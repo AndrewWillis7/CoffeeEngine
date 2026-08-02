@@ -2,6 +2,7 @@
 #include "EngineContext.h"
 #include "Scripting/GraphicsBindings.h"
 #include "Scripting/WindowBindings.h"
+#include "Scripting/Vector2Bindings.h"
 
 #include <iostream>
 
@@ -39,6 +40,7 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     // Binding Engine Subsystems
     GraphicsBindings::Register(m_Lua, context.graphics);
     WindowBindings::Register(m_Lua, context.window);
+    Vector2Bindings::Register(m_Lua);
     // Future Actor Bindings
     // Future Sprite Bindings
 

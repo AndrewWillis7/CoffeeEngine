@@ -48,9 +48,10 @@ int main() {
         lastTime = currentTime;
 
         window->PollEvents();
-        scriptEngine.Update(deltaTime);
 
         glClear(GL_COLOR_BUFFER_BIT);
+        scriptEngine.Update(deltaTime);
+        
         graphicsContext->SwapBuffers();
     }
 
