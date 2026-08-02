@@ -37,7 +37,7 @@ int main() {
     while (!window->ShouldClose()) {
         auto currentTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<float> deltaDuration = currentTime - lastTime;
-        float deltaTime = deltaDuration.count();
+        //float deltaTime = deltaDuration.count();
         window->PollEvents();
 
         // Swap the front and back buffers
