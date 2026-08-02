@@ -11,6 +11,8 @@ public:
     // Pushes the rendered frame to the screen
     virtual void SwapBuffers() = 0;
 
+    virtual void SetClearColor(float r, float g, float b) = 0;
+
     // Factory Method (Implemented in a factory cpp file)
     static std::unique_ptr<IGraphicsContext> Create(void* nativeDisplay, void* nativeWindow);
 };

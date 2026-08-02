@@ -2,3 +2,4 @@
 *.o
 *.d
 engine_test
+.vscode

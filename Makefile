@@ -1,11 +1,11 @@
 CXX = g++
 
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -MMD -MP -Isrc -Isrc/external
-LDFLAGS = src/OS_/liblua54.a -lX11 -lGL -ldl -pthread
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -MMD -MP -Isrc -Isrc/Core/lua/include -ffunction-sections -fdata-sections
+LDFLAGS = -s src/Core/lua/liblua.a -lX11 -lGL -ldl -pthread -lm
 
 TARGET = engine_test
 
-SRC := $(shell find . -name "*.cpp")
+SRC := main.cpp $(shell find src -name "*.cpp")
 OBJ := $(patsubst %.cpp,build/%.o,$(SRC))
 DEP := $(OBJ:.o=.d)
 

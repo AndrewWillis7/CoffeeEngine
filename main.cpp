@@ -7,11 +7,6 @@
 // Include the basic GL headers to test a basic screen in main for now... (Remove later)
 #include <GL/gl.h>
 
-// Temp Bindings
-void SetClearColor(float r, float g, float b) {
-    glClearColor(r, g, b, 1.0f);
-}
-
 int main() {
     std::cout << "Initializeing Engine..." << std::endl;
 
@@ -31,16 +26,25 @@ int main() {
         }
     });
 
+    // Script Stuff
+    ScriptEngine scriptEngine;
+    scriptEngine.Init("scripts/main.lua", graphicsContext.get(), window.get());
+
+    // LOOP STUFF
+
     auto lastTime = std::chrono::high_resolution_clock::now();
 
     // CORE LOOP (For now)
     while (!window->ShouldClose()) {
         auto currentTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<float> deltaDuration = currentTime - lastTime;
-        //float deltaTime = deltaDuration.count();
-        window->PollEvents();
 
-        // Swap the front and back buffers
+        float deltaTime = deltaDuration.count();
+        lastTime = currentTime;
+
+        window->PollEvents();
+        scriptEngine.Update(deltaTime);
+
         glClear(GL_COLOR_BUFFER_BIT);
         graphicsContext->SwapBuffers();
     }

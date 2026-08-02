@@ -5,6 +5,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <GL/glx.h>
+#include <GL/gl.h>
 
 GLXGraphicsContext::GLXGraphicsContext(void* display, void* window)
     : m_Display(static_cast<_XDisplay*>(display)),
@@ -51,4 +52,8 @@ void GLXGraphicsContext::Init() {
 
 void GLXGraphicsContext::SwapBuffers() {
     glXSwapBuffers(m_Display, m_Window);
+}
+
+void GLXGraphicsContext::SetClearColor(float r, float g, float b) {
+    glClearColor(r, g, b, 1.0f);
 }

@@ -12,6 +12,7 @@ public:
 
     void Init() override;
     void SwapBuffers() override;
+    void SetClearColor(float r, float g, float b) override;
 
 private:
     _XDisplay* m_Display;
