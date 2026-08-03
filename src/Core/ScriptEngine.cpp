@@ -6,6 +6,10 @@
 #include "Scripting/RigidBody2DBindings.h"
 #include "Scripting/ShaderBindings.h"
 #include "Scripting/RendererBindings.h"
+#include "Scripting/CollisionShape2DBindings.h"
+#include "Scripting/PlayerActorConfigBindings.h"
+#include "Scripting/ActorRegistryBindings.h"
+#include "Scripting/InputBindings.h"
 
 #include <iostream>
 
@@ -47,6 +51,10 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     RigidBody2DBindings::Register(m_Lua, context.actors);
     ShaderBindings::Register(m_Lua, context.actors);
     RendererBindings::Register(m_Lua, context.renderer);
+    CollisionShape2DBindings::Register(m_Lua, context.actors);
+    PlayerActorConfigBindings::Register(m_Lua, context.actors);
+    ActorRegistryBindings::Register(m_Lua, context.actors);
+    InputBindings::Register(m_Lua, context.input);
     // Future Actor Bindings
     // Future Sprite Bindings
 

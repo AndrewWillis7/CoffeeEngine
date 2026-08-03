@@ -3,6 +3,7 @@
 #include "Core/ScriptEngine.h"
 #include "Core/EngineContext.h"
 #include "Core/ActorRegistry.h"
+#include "Core/Input/UserInputService.h"
 #include "Renderer/Renderer2D.h"
 #include <chrono>
 #include <iostream>
@@ -29,15 +30,22 @@ int main() {
     renderer2D.Init();
     renderer2D.SetViewportSize(window->GetWidth(), window->GetHeight());
 
-    // Owns Rigidbody and shader creation at runtime
+    // Owns Rigidbody, shader, collision shape, and player config creation at runtime
     ActorRegistry actorRegistry;
 
-    window->SetEventCallback([&renderer2D](const WindowEvent& e){
+    // Polling-style keyboard/mouse state, fed by the same window event callback below
+    UserInputService inputService;
+
+    window->SetEventCallback([&renderer2D, &inputService](const WindowEvent& e){
         if (e.type == WindowEvent::Type::Close) {
             std::cout << "Event: Window Closed!" << std::endl;
         } else if (e.type == WindowEvent::Type::Resize) {
             renderer2D.SetViewportSize(e.width, e.height);
         }
+
+        // Keyboard/mouse events fall straight through; the service decides
+        // what to do with each type (see UserInputService::OnWindowEvent).
+        inputService.OnWindowEvent(e);
     });
 
     // Script Stuff
@@ -46,6 +54,7 @@ int main() {
     engineContext.window = window.get();
     engineContext.renderer = &renderer2D;
     engineContext.actors = &actorRegistry;
+    engineContext.input = &inputService;
 
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);
@@ -67,8 +76,12 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT);
         renderer2D.BeginFrame(deltaTime);
         scriptEngine.Update(deltaTime);
-        
+
         graphicsContext->SwapBuffers();
+
+        // Clear this-frame Pressed/Released edges now that scripts have had
+        // a chance to read them -- next frame's PollEvents() starts them fresh.
+        inputService.NewFrame();
     }
 
     std::cout << "Engine shut down cleanly." << std::endl;

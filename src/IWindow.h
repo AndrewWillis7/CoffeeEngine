@@ -3,10 +3,19 @@
 #include <memory>
 #include <functional>
 
+// Shared across OS_ Backends and UserInputService so both sides can agree on
+// what a mouse button number means
+
+enum class MouseButton {Left, Right, Middle};
+
 // Struct for passing events to the engine
 struct WindowEvent {
-    enum class Type { Close, Resize, KeyPressed } type;
-    int width, height, keycode;
+    enum class Type { Close, Resize, KeyPressed, KeyReleased, MouseButtonPressed, MouseButtonReleased, MouseMoved } type;
+    int width = 0, height = 0, keycode = 0;
+
+    // Mouse Specific Fields. mouseX/mouseY are window-client-space pixels
+    // Button is a MouseButton cast to int
+    int mouseX = 0, mouseY = 0, button = 0;
 };
 
 class IWindow {

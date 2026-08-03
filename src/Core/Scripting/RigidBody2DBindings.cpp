@@ -2,6 +2,8 @@
 #include "LuaBinding.h"
 #include "Core/ActorRegistry.h"
 #include "Core/Physics/RigidBody2D.h"
+#include "Core/Physics/CollisionShape2D.h"
+#include "Core/Gameplay/PlayerActorConfig.h"
 #include "Renderer/Shader.h"
 
 extern "C" {
@@ -13,6 +15,8 @@ namespace {
 
 constexpr const char* kMetatableName = "Coffee.RigidBody2D";
 constexpr const char* kShaderMetatableName = "Coffee.Shader"; // must match ShaderBindings.cpp
+constexpr const char* kCollisionShapeMetatableName = "Coffee.CollisionShape2D"; // must match CollisionShape2DBindings.cpp
+constexpr const char* kPlayerConfigMetatableName = "Coffee.PlayerActorConfig"; // must match PlayerActorConfigBindings.cpp
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 constexpr float kRadToDeg = 180.0f / 3.14159265358979323846f;
 
@@ -145,6 +149,77 @@ int Lua_SetShader(lua_State* L) {
     return 0;
 }
 
+// body:SetCollisionShape(shape) attaches a collider (created via
+// CollisionShape2D.NewBox / .NewCircle); body:SetCollisionShape(nil) clears it.
+int Lua_SetCollisionShape(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        self->collisionShape = nullptr;
+    } else {
+        self->collisionShape = LuaBinding::CheckPtr<CollisionShape2D>(L, 2, kCollisionShapeMetatableName);
+    }
+    return 0;
+}
+
+// body:GetCollisionShape() -- returns the attached shape, or nil.
+int Lua_GetCollisionShape(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    if (!self->collisionShape) {
+        lua_pushnil(L);
+    } else {
+        LuaBinding::PushPtr<CollisionShape2D>(L, kCollisionShapeMetatableName, self->collisionShape);
+    }
+    return 1;
+}
+
+// body:CollidesWith(otherBody) -- true if both have a collisionShape set
+// and those shapes currently overlap.
+int Lua_CollidesWith(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    RigidBody2D* other = CheckSelf(L, 2);
+    lua_pushboolean(L, self->CollidesWith(*other));
+    return 1;
+}
+
+// body:SetPlayerConfig(config) marks this body as the player (created via
+// PlayerActorConfig.new()); body:SetPlayerConfig(nil) un-marks it.
+int Lua_SetPlayerConfig(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        self->playerConfig = nullptr;
+    } else {
+        self->playerConfig = LuaBinding::CheckPtr<PlayerActorConfig>(L, 2, kPlayerConfigMetatableName);
+    }
+    return 0;
+}
+
+// body:GetPlayerConfig() -- returns the attached config, or nil.
+int Lua_GetPlayerConfig(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    if (!self->playerConfig) {
+        lua_pushnil(L);
+    } else {
+        LuaBinding::PushPtr<PlayerActorConfig>(L, kPlayerConfigMetatableName, self->playerConfig);
+    }
+    return 1;
+}
+
+int Lua_IsPlayer(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    lua_pushboolean(L, self->playerConfig != nullptr);
+    return 1;
+}
+
+// body:ResolveCollisionWith(otherBody) -- if overlapping, pushes both
+// bodies apart (mass-weighted; mass <= 0 means immovable, e.g. a wall).
+// Box shapes only for now. Returns true if the bodies were overlapping.
+int Lua_ResolveCollisionWith(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    RigidBody2D* other = CheckSelf(L, 2);
+    lua_pushboolean(L, self->ResolveCollisionWith(*other));
+    return 1;
+}
+
 const luaL_Reg kMethods[] = {
     {"AddForce", Lua_AddForce},
     {"Integrate", Lua_Integrate},
@@ -161,6 +236,13 @@ const luaL_Reg kMethods[] = {
     {"SetMass", Lua_SetMass},
     {"SetDrag", Lua_SetDrag},
     {"SetShader", Lua_SetShader},
+    {"SetCollisionShape", Lua_SetCollisionShape},
+    {"GetCollisionShape", Lua_GetCollisionShape},
+    {"CollidesWith", Lua_CollidesWith},
+    {"SetPlayerConfig", Lua_SetPlayerConfig},
+    {"GetPlayerConfig", Lua_GetPlayerConfig},
+    {"IsPlayer", Lua_IsPlayer},
+    {"ResolveCollisionWith", Lua_ResolveCollisionWith},
     {nullptr, nullptr}
 };
 

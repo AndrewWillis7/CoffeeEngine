@@ -4,6 +4,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM
 #include <iostream>
 
 static LRESULT CALLBACK WIndowProc(
@@ -125,6 +126,51 @@ LRESULT WindowsWindow::HandleMessage(
         case WM_KEYDOWN: {
             if (m_EventCallback) {
                 m_EventCallback({WindowEvent::Type::KeyPressed, 0, 0, static_cast<int>(wParam)});
+            }
+            return 0;
+        }
+        case WM_KEYUP: {
+            if (m_EventCallback) {
+                WindowEvent e{WindowEvent::Type::KeyReleased};
+                e.keycode = static_cast<int>(wParam);
+                m_EventCallback(e);
+            }
+            return 0;
+        }
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN: {
+            if (m_EventCallback) {
+                WindowEvent e{WindowEvent::Type::MouseButtonPressed};
+                e.button = static_cast<int>(msg == WM_LBUTTONDOWN ? MouseButton::Left
+                                            : msg == WM_RBUTTONDOWN ? MouseButton::Right
+                                            : MouseButton::Middle);
+                e.mouseX = GET_X_LPARAM(lParam);
+                e.mouseY = GET_Y_LPARAM(lParam);
+                m_EventCallback(e);
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONUP: {
+            if (m_EventCallback) {
+                WindowEvent e{WindowEvent::Type::MouseButtonReleased};
+                e.button = static_cast<int>(msg == WM_LBUTTONUP ? MouseButton::Left
+                                            : msg == WM_RBUTTONUP ? MouseButton::Right
+                                            : MouseButton::Middle);
+                e.mouseX = GET_X_LPARAM(lParam);
+                e.mouseY = GET_Y_LPARAM(lParam);
+                m_EventCallback(e);
+            }
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (m_EventCallback) {
+                WindowEvent e{WindowEvent::Type::MouseMoved};
+                e.mouseX = GET_X_LPARAM(lParam);
+                e.mouseY = GET_Y_LPARAM(lParam);
+                m_EventCallback(e);
             }
             return 0;
         }

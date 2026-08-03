@@ -7,8 +7,23 @@
 // You'll need the devkit for X11 if you're recompiling the engine btw...
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/XKBlib.h>
 
 #include "stb_image.h"
+
+namespace {
+
+    // X11s button 1/2/3 binded to our MouseButton Enum. Returns -1 for buttons we dont map (YET)
+
+    int TranslateXButton(unsigned int xButton) {
+        switch (xButton) {
+            case Button1: return static_cast<int>(MouseButton::Left);
+            case Button2: return static_cast<int>(MouseButton::Middle);
+            case Button3: return static_cast<int>(MouseButton::Right);
+            default: return -1;
+        }
+    }
+}
 
 LinuxWindow::LinuxWindow(const std::string& title, int width, int height)
     : m_width(width), m_height(height)
@@ -18,6 +33,9 @@ LinuxWindow::LinuxWindow(const std::string& title, int width, int height)
         std::cerr << "Engine Fatal: Failed to open X11 display\n";
         exit(1);
     }
+
+    // This keeps press and release pairs on a different tick so we can detect HOLDING and its not just tapping
+    XkbSetDetectableAutoRepeat(m_Display, True, nullptr);
 
     int screen = DefaultScreen(m_Display);
     Window root = RootWindow(m_Display, screen);
@@ -34,7 +52,8 @@ LinuxWindow::LinuxWindow(const std::string& title, int width, int height)
     swa.colormap = cmap;
 
     // Give all necessary event handles please!!
-    swa.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask;
+    swa.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask
+                    | ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
 
     m_Window = XCreateWindow(m_Display, root, 0, 0, m_width, m_height, 0,
                                 vi.depth, InputOutput, vi.visual,
@@ -83,6 +102,47 @@ void LinuxWindow::PollEvents() {
                 // Handle Keyboard Input
                 if (m_EventCallback)
                     m_EventCallback(WindowEvent{WindowEvent::Type::KeyPressed, 0, 0, static_cast<int>(event.xkey.keycode)});
+                break;
+
+            case KeyRelease:
+                if (m_EventCallback) {
+                    WindowEvent e{WindowEvent::Type::KeyReleased};
+                    e.keycode = static_cast<int>(event.xkey.keycode);
+                    m_EventCallback(e);
+                }
+                break;
+            
+            case ButtonPress: {
+                int button = TranslateXButton(event.xbutton.button);
+                if (button >= 0 && m_EventCallback) {
+                    WindowEvent e{WindowEvent::Type::MouseButtonPressed};
+                    e.button = button;
+                    e.mouseX = event.xbutton.x;
+                    e.mouseY = event.xbutton.y;
+                    m_EventCallback(e);
+                }
+                break;
+            }
+
+            case ButtonRelease: {
+                int button = TranslateXButton(event.xbutton.button);
+                if (button >= 0 && m_EventCallback) {
+                    WindowEvent e{WindowEvent::Type::MouseButtonReleased};
+                    e.button = button;
+                    e.mouseX = event.xbutton.x;
+                    e.mouseY = event.xbutton.y;
+                    m_EventCallback(e);
+                }
+                break;
+            }
+
+            case MotionNotify:
+                if (m_EventCallback) {
+                    WindowEvent e{WindowEvent::Type::MouseMoved};
+                    e.mouseX = event.xmotion.x;
+                    e.mouseY = event.xmotion.y;
+                    m_EventCallback(e);
+                }
                 break;
         }
     }
