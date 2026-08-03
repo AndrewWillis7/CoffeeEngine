@@ -113,6 +113,16 @@ void LinuxWindow::PollEvents() {
                 break;
             
             case ButtonPress: {
+                if (event.xbutton.button == Button4 || event.xbutton.button == Button5) {
+                    if (m_EventCallback) {
+                        WindowEvent e{WindowEvent::Type::MouseScrolled};
+                        e.scrollDelta = (event.xbutton.button == Button4) ? 1.0f : -1.0f;
+                        e.mouseX = event.xbutton.x;
+                        e.mouseY = event.xbutton.y;
+                        m_EventCallback(e);
+                    }
+                    break;
+                }
                 int button = TranslateXButton(event.xbutton.button);
                 if (button >= 0 && m_EventCallback) {
                     WindowEvent e{WindowEvent::Type::MouseButtonPressed};
@@ -190,6 +200,7 @@ void LinuxWindow::SetIcon(const std::string& filepath) {
     
     XFlush(m_Display);
     stbi_image_free(data);
-}
+}// File: src/Renderer/Renderer2D.cpp -- add #include "Texture.h", then replace
+// DrawQuad's body with the factored version and add DrawTexturedQuad:
 
 #endif

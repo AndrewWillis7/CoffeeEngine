@@ -1,6 +1,7 @@
 #pragma once
 #include "Core/Math/Transform2D.h"
 #include "Core/Math/Color.h"
+#include "Texture.h"
 #include <memory>
 
 class Shader;
@@ -31,10 +32,16 @@ public:
     // Basic Quad Draw at Transform, can have applied shaders
     void DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader);
 
+    void DrawTexturedQuad(const Transform2D& transform, const Vector2& size, const Color& tint,
+                        Shader* shader, Texture* texture,
+                        Vector2 uvOffset = {0.0f, 0.0f}, Vector2 uvScale = {1.0f, 1.0f});
+
     Shader* GetDefaultShader() const { return m_DefaultShader.get();}
 
 private:
     void ApplyCommonUniforms(Shader& shader, const Transform2D& transform, const Vector2& size, const Color& color) const;
+
+    void SubmitQuad(Shader& active);
 
     unsigned int m_VBO = 0;
     std::unique_ptr<Shader> m_DefaultShader;

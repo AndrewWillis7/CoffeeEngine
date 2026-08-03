@@ -31,6 +31,8 @@ public:
     bool IsMouseButtonPressed(MouseButton button) const;
     bool IsMouseButtonReleased(MouseButton button) const;
 
+    float GetScrollDelta() const {return m_ScrollDelta;}
+
     Vector2 GetMousePosition() const { return m_MousePosition; }
 
     // Every keycode that went down on THIS frame. Mainly a debugging aid --
@@ -48,4 +50,5 @@ private:
     std::unordered_set<int> m_MouseButtonsReleasedThisFrame;
 
     Vector2 m_MousePosition;
+    float m_ScrollDelta = 0.0f;
 };

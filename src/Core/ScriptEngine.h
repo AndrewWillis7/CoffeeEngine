@@ -16,6 +16,10 @@ public:
     void Update(float deltaTime);
     void Shutdown();
 
+    void Reload();
+
 private:
     lua_State* m_Lua = nullptr;
+    std::string m_ScriptPath;
+    EngineContext* m_Context = nullptr;
 };

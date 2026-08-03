@@ -72,6 +72,9 @@ extern PFNGLUNIFORM2FPROC Uniform2f;
 extern PFNGLUNIFORM3FPROC Uniform3f;
 extern PFNGLUNIFORM4FPROC Uniform4f;
 
+using PFNGLUNIFORM1IPROC = void (*)(GLint location, GLint v0);
+extern PFNGLUNIFORM1IPROC Uniform1i;
+
 // Resolves every entrypoint above against the GL Context
 // Must be called after IGraphicsContext::Init()
 bool Load();

@@ -30,6 +30,10 @@ void UserInputService::OnWindowEvent(const WindowEvent& event) {
             m_MousePosition = Vector2(static_cast<float>(event.mouseX), static_cast<float>(event.mouseY));
             break;
 
+        case WindowEvent::Type::MouseScrolled:
+            m_ScrollDelta += event.scrollDelta;
+            break;
+
         default:
             break; // Close/Resize -- not relevant to UIS
     }
@@ -40,6 +44,7 @@ void UserInputService::NewFrame() {
     m_KeysReleasedThisFrame.clear();
     m_MouseButtonsPressedThisFrame.clear();
     m_MouseButtonsReleasedThisFrame.clear();
+    m_ScrollDelta = 0.0f;
 }
 
 bool UserInputService::IsKeyDown(int keycode) const {

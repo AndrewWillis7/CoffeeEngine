@@ -4,6 +4,7 @@
 #include "Core/EngineContext.h"
 #include "Core/ActorRegistry.h"
 #include "Core/Input/UserInputService.h"
+#include "Core/Gameplay/UI/EngineUIController.h"
 #include "Renderer/Renderer2D.h"
 #include <chrono>
 #include <iostream>
@@ -36,6 +37,19 @@ int main() {
     // Polling-style keyboard/mouse state, fed by the same window event callback below
     UserInputService inputService;
 
+    // Script Stuff
+    EngineContext engineContext;
+    engineContext.graphics = graphicsContext.get();
+    engineContext.window = window.get();
+    engineContext.renderer = &renderer2D;
+    engineContext.actors = &actorRegistry;
+    engineContext.input = &inputService;
+
+    ScriptEngine scriptEngine;
+    scriptEngine.Init("scripts/main.lua", engineContext);
+
+    EngineUIController engineUI(actorRegistry, renderer2D, inputService, scriptEngine);
+
     window->SetEventCallback([&renderer2D, &inputService](const WindowEvent& e){
         if (e.type == WindowEvent::Type::Close) {
             std::cout << "Event: Window Closed!" << std::endl;
@@ -48,17 +62,7 @@ int main() {
         inputService.OnWindowEvent(e);
     });
 
-    // Script Stuff
-    EngineContext engineContext;
-    engineContext.graphics = graphicsContext.get();
-    engineContext.window = window.get();
-    engineContext.renderer = &renderer2D;
-    engineContext.actors = &actorRegistry;
-    engineContext.input = &inputService;
-
-    ScriptEngine scriptEngine;
-    scriptEngine.Init("scripts/main.lua", engineContext);
-
+    
     // LOOP STUFF
 
     auto lastTime = std::chrono::high_resolution_clock::now();

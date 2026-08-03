@@ -1,3 +1,5 @@
+// File: src/Renderer/GLLoader.cpp -- replace the whole file body with this
+// (adds Uniform1i, removes the duplicated block)
 #include "GLLoader.h"
 #include <iostream>
 
@@ -8,19 +10,18 @@ void* GetPlatformProcAddress(const char* name) {
     return reinterpret_cast<void*>(
         glXGetProcAddressARB(reinterpret_cast<const GLubyte*>(name)));
 }
-}// End Of Namespace
+}
 #elif defined (_WIN32)
     #include <windows.h>
 namespace {
 void* GetPlatformProcAddress(const char* name) {
-    // WGL Wiring Required...
     return reinterpret_cast<void*>(wglGetProcAddress(name));
 }
-} // End of Namespace
+}
 #else
 namespace {
 void* GetPlatformProcAddress(const char*) {return nullptr;}
-} // End of Namespace
+}
 #endif
 
 namespace GL {
@@ -55,9 +56,9 @@ namespace GL {
     PFNGLUNIFORM2FPROC Uniform2f = nullptr;
     PFNGLUNIFORM3FPROC Uniform3f = nullptr;
     PFNGLUNIFORM4FPROC Uniform4f = nullptr;
+    PFNGLUNIFORM1IPROC Uniform1i = nullptr;
 
 namespace {
-
 template <typename FnPtr>
 bool LoadOne(FnPtr& outFn, const char* name) {
     outFn = reinterpret_cast<FnPtr>(GetPlatformProcAddress(name));
@@ -67,7 +68,7 @@ bool LoadOne(FnPtr& outFn, const char* name) {
     }
     return true;
 }
-} // End of Namespace
+}
 
 bool Load() {
     bool ok = true;
@@ -102,38 +103,8 @@ bool Load() {
     ok &= LoadOne(Uniform2f, "glUniform2f");
     ok &= LoadOne(Uniform3f, "glUniform3f");
     ok &= LoadOne(Uniform4f, "glUniform4f");
-    ok &= LoadOne(CreateShader, "glCreateShader");
-    ok &= LoadOne(ShaderSource, "glShaderSource");
-    ok &= LoadOne(CompileShader, "glCompileShader");
-    ok &= LoadOne(GetShaderiv, "glGetShaderiv");
-    ok &= LoadOne(GetShaderInfoLog, "glGetShaderInfoLog");
-    ok &= LoadOne(DeleteShader, "glDeleteShader");
+    ok &= LoadOne(Uniform1i, "glUniform1i");
 
-    ok &= LoadOne(CreateProgram, "glCreateProgram");
-    ok &= LoadOne(AttachShader, "glAttachShader");
-    ok &= LoadOne(LinkProgram, "glLinkProgram");
-    ok &= LoadOne(GetProgramiv, "glGetProgramiv");
-    ok &= LoadOne(GetProgramInfoLog, "glGetProgramInfoLog");
-    ok &= LoadOne(DeleteProgram, "glDeleteProgram");
-    ok &= LoadOne(UseProgram, "glUseProgram");
-
-    ok &= LoadOne(GenBuffers, "glGenBuffers");
-    ok &= LoadOne(BindBuffer, "glBindBuffer");
-    ok &= LoadOne(BufferData, "glBufferData");
-    ok &= LoadOne(DeleteBuffers, "glDeleteBuffers");
-
-    ok &= LoadOne(VertexAttribPointer, "glVertexAttribPointer");
-    ok &= LoadOne(EnableVertexAttribArray, "glEnableVertexAttribArray");
-    ok &= LoadOne(DisableVertexAttribArray, "glDisableVertexAttribArray");
-
-    ok &= LoadOne(GetUniformLocation, "glGetUniformLocation");
-    ok &= LoadOne(GetAttribLocation, "glGetAttribLocation");
-    ok &= LoadOne(Uniform1f, "glUniform1f");
-    ok &= LoadOne(Uniform2f, "glUniform2f");
-    ok &= LoadOne(Uniform3f, "glUniform3f");
-    ok &= LoadOne(Uniform4f, "glUniform4f");
-
-    return ok;
     return ok;
 }
 

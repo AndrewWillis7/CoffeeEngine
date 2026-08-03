@@ -74,4 +74,79 @@ void main() {
 }
 )GLSL";
 
+// File: src/Renderer/BuiltInShaders.cpp -- add inside namespace BuiltInShaders
+
+const char* RoundedPanelFragmentSrc = R"GLSL(
+#version 120
+
+uniform vec4 u_Color;         // fill
+uniform vec2 u_Size;          // quad size, pixels (already includes overdraw)
+uniform float u_CornerRadius; // pixels
+uniform vec4 u_BorderColor;
+uniform float u_BorderWidth;  // pixels
+uniform vec4 u_ShadowColor;
+uniform vec2 u_ShadowOffset;  // pixels
+uniform float u_ShadowBlur;   // pixels
+
+varying vec2 v_LocalPos; // [-0.5, 0.5] regardless of overdraw, same convention as GlowFragmentSrc
+
+float RoundedBoxSDF(vec2 p, vec2 halfSize, float radius) {
+    vec2 q = abs(p) - halfSize + radius;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+void main() {
+    vec2 pixelPos = v_LocalPos * u_Size; // back to pixel space, origin at center
+    vec2 halfSize = u_Size * 0.5;
+
+    float dist = RoundedBoxSDF(pixelPos, halfSize, u_CornerRadius);
+    float shadowDist = RoundedBoxSDF(pixelPos - u_ShadowOffset, halfSize, u_CornerRadius);
+
+    float fillAlpha = 1.0 - smoothstep(0.0, 1.5, dist);
+    float borderMask = smoothstep(0.0, 1.5, dist + u_BorderWidth) - smoothstep(0.0, 1.5, dist);
+    float shadowAlpha = (1.0 - smoothstep(0.0, u_ShadowBlur, shadowDist)) * u_ShadowColor.a;
+
+    vec4 color = u_ShadowColor * shadowAlpha;
+    color = mix(color, u_Color, fillAlpha);
+    color = mix(color, u_BorderColor, borderMask);
+
+    gl_FragColor = color;
+}
+)GLSL";
+
+const char* TexturedFragmentSrc = R"GLSL(
+#version 120
+
+uniform sampler2D u_Texture;
+uniform vec4 u_Color;   // tint -- white for no tint
+uniform vec2 u_UVOffset;
+uniform vec2 u_UVScale;
+
+varying vec2 v_LocalPos;
+
+void main() {
+    vec2 uv = (v_LocalPos + 0.5) * u_UVScale + u_UVOffset;
+    gl_FragColor = texture2D(u_Texture, uv) * u_Color;
+}
+)GLSL";
+
+const char* TextFragmentSrc = R"GLSL(
+#version 120
+
+// Font atlas is a single-channel (GL_ALPHA) texture -- r/g/b sample as 0,
+// only .a carries the glyph coverage. Color comes entirely from u_Color.
+uniform sampler2D u_Texture;
+uniform vec4 u_Color;
+uniform vec2 u_UVOffset;
+uniform vec2 u_UVScale;
+
+varying vec2 v_LocalPos;
+
+void main() {
+    vec2 uv = (v_LocalPos + 0.5) * u_UVScale + u_UVOffset;
+    float coverage = texture2D(u_Texture, uv).a;
+    gl_FragColor = vec4(u_Color.rgb, u_Color.a * coverage);
+}
+)GLSL";
+
 } // namespace BuiltinShaders

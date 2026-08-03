@@ -8,4 +8,7 @@ namespace BuiltInShaders {
     extern const char* QuadVertexSrc;
     extern const char* FlatFragmentSrc;
     extern const char* GlowFragmentSrc;
+    extern const char* RoundedPanelFragmentSrc;
+    extern const char* TexturedFragmentSrc;
+    extern const char* TextFragmentSrc;
 } // End of Namespace BuiltInShaders

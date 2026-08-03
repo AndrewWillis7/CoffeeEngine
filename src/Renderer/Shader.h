@@ -25,6 +25,8 @@ public:
     void SetVec3(const std::string& name, float x, float y, float z);
     void SetVec4(const std::string& name, float x, float y, float z, float w);
 
+    void SetInt(const std::string& name, int value);
+
     // Sets how much bigger than the RigidBody2D's logical size to fraw the quad
     float overdrawScale = 1.0f;
 

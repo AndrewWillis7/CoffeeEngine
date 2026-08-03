@@ -1,5 +1,6 @@
 #include "ScriptEngine.h"
 #include "EngineContext.h"
+#include "ActorRegistry.h"
 #include "Scripting/GraphicsBindings.h"
 #include "Scripting/WindowBindings.h"
 #include "Scripting/Vector2Bindings.h"
@@ -41,6 +42,9 @@ ScriptEngine::ScriptEngine() = default;
 ScriptEngine::~ScriptEngine() {Shutdown();}
 
 void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
+    m_ScriptPath = scriptPath;
+    m_Context = &context;
+    
     m_Lua = luaL_newstate();
     luaL_openlibs(m_Lua);
 
@@ -79,4 +83,18 @@ void ScriptEngine::Shutdown() {
         lua_close(m_Lua);
         m_Lua = nullptr;
     }
+}
+
+void ScriptEngine::Reload() {
+    if (!m_Context) {
+        std::cerr << "Engine Warning: ScriptEngine::Reload() called before Init()\n";
+        return;
+    }
+    std::cout << "Reloading Lua scripts...\n";
+
+    Shutdown();
+    if (m_Context->actors) {
+        m_Context->actors->Clear();
+    }
+    Init(m_ScriptPath, *m_Context);
 }

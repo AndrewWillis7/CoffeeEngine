@@ -1,6 +1,7 @@
 #include "Renderer2D.h"
 #include "GLLoader.h"
 #include "Shader.h"
+#include "Texture.h"
 #include "BuiltInShaders.h"
 #include <GL/gl.h>
 #include <iostream>
@@ -75,20 +76,10 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
     shader.SetVec4("u_Color", color.r, color.g, color.b, color.a);
 }
 
-void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader) {
-    if (!m_Initialized) return;
-
-    Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
-    if (!active || !active->IsValid()) return;
-
-    Vector2 drawSize = size * active->overdrawScale;
-
-    active->Bind();
-    ApplyCommonUniforms(*active, transform, drawSize, color);
-
+void Renderer2D::SubmitQuad(Shader& active) {
     GL::BindBuffer(GL_ARRAY_BUFFER, m_VBO);
 
-    GLint posAttrib = GL::GetAttribLocation(active->GetProgram(), "a_LocalPos");
+    GLint posAttrib = GL::GetAttribLocation(active.GetProgram(), "a_LocalPos");
     if (posAttrib >= 0) {
         GL::EnableVertexAttribArray(static_cast<GLuint>(posAttrib));
         GL::VertexAttribPointer(static_cast<GLuint>(posAttrib), 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
@@ -101,5 +92,35 @@ void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, con
     }
 
     GL::BindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader) {
+    if (!m_Initialized) return;
+
+    Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
+    if (!active || !active->IsValid()) return;
+
+    Vector2 drawSize = size * active->overdrawScale;
+
+    active->Bind();
+    ApplyCommonUniforms(*active, transform, drawSize, color);
+    SubmitQuad(*active);
+    Shader::Unbind();
+}
+
+void Renderer2D::DrawTexturedQuad(const Transform2D& transform, const Vector2& size, const Color& tint,
+                                   Shader* shader, Texture* texture, Vector2 uvOffset, Vector2 uvScale) {
+    if (!m_Initialized || !texture || !texture->IsValid()) return;
+    if (!shader || !shader->IsValid()) return;
+
+    Vector2 drawSize = size * shader->overdrawScale;
+
+    texture->Bind();
+    shader->Bind();
+    ApplyCommonUniforms(*shader, transform, drawSize, tint);
+    shader->SetInt("u_Texture", 0);
+    shader->SetVec2("u_UVOffset", uvOffset.x, uvOffset.y);
+    shader->SetVec2("u_UVScale", uvScale.x, uvScale.y);
+    SubmitQuad(*shader);
     Shader::Unbind();
 }

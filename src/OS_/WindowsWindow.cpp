@@ -174,6 +174,21 @@ LRESULT WindowsWindow::HandleMessage(
             }
             return 0;
         }
+
+        case WM_MOUSEWHEEL: {
+            if (m_EventCallback) {
+                WindowEvent e{WindowEvent::Type::MouseScrolled};
+                e.scrollDelta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+                // WM_MOUSEWHEEL gives SCREEN coordinates, unlike every other mouse
+                // message here which is client-space -- convert or this will be wrong.
+                POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                ScreenToClient(m_Hwnd, &pt);
+                e.mouseX = pt.x;
+                e.mouseY = pt.y;
+                m_EventCallback(e);
+            }
+            return 0;
+        }
     }
 
     return DefWindowProc(
