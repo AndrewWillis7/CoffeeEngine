@@ -32,14 +32,45 @@ public:
 
     float angularVelocity = 0.0f;
 
+    // Engine-wide gravity acceleration (px/s^2), shared by every
+    // RigidBody2D -- not a per-instance value. Defaults to zero so a
+    // script that never touches this (e.g. a future top-down game) sees
+    // no behavior change; a sidescroller opts in via SetGravity/Lua's
+    // Physics.SetGravity. Applied in Integrate() below to any body with
+    // mass > 0 -- same "mass <= 0 is static/immovable" convention already
+    // used for m_ForceAccum here and for the wall in ResolveCollisionWith.
+    static void SetGravity(const Vector2& gravity) {s_Gravity = gravity;}
+    static Vector2 GetGravity() {return s_Gravity;}
+
     void AddForce(const Vector2& force) {m_ForceAccum += force;}
-    
+
+    // True if a ResolveCollisionWith/ResolveWindowBounds call made since
+    // the last Integrate() pushed this body upward out of an overlap --
+    // i.e. it's resting on something below it as of this frame. Meant for
+    // gating things like a jump (only allowed while grounded) from Lua;
+    // see the comment on Integrate() below for the reset timing.
+    bool IsGrounded() const {return m_Grounded;}
+
     // Advances Velocity from Accumulated force, then advances the transorms position
     // This is form the velocity, and called once per step with a fixed frame or DeltaTime
     void Integrate(float dt) {
-        if (mass > 0.0f)
+        // Reset here, not in ResolveCollisionWith/ResolveWindowBounds --
+        // this makes Integrate() the start of "this frame's" grounded
+        // state. The usual per-frame order (Integrate(), then resolve
+        // collisions against the floor/walls) means IsGrounded() during
+        // THIS Update() call still reflects last frame's resolution
+        // (correct for "am I allowed to jump right now"), and gets
+        // refreshed by the resolve calls that follow before next frame.
+        m_Grounded = false;
+
+        if (mass > 0.0f) {
             velocity += (m_ForceAccum / mass) * dt;
-        
+            // Gravity is an acceleration (F=mg, a=F/m=g -- mass cancels
+            // out), not a force, so it's added directly to velocity
+            // rather than routed through m_ForceAccum/mass.
+            velocity += s_Gravity * dt;
+        }
+
         if (drag > 0.0f)
             velocity *= (1.0f - drag * dt);
 
@@ -79,6 +110,31 @@ public:
 
         transform.position += correction * (invMassSelf / totalInvMass);
         other.transform.position -= correction * (invMassOther / totalInvMass);
+
+        // Zero self's velocity on whichever axis just got corrected --
+        // same convention ResolveWindowBounds already uses below. Without
+        // this, a resting body (e.g. the player standing on a floor made
+        // of another RigidBody2D rather than the window edge) gets
+        // positionally clamped every frame but keeps accelerating under
+        // gravity underneath that clamp, forever, invisibly -- harmless
+        // while the correction keeps catching it, but the first frame it
+        // doesn't (an edge, a gap, a thin platform) that velocity is still
+        // there and causes a teleport/tunnel instead of a normal fall.
+        // Only self's velocity is touched, matching the self-vs-other
+        // asymmetry the rest of this method already has -- `other` is
+        // typically immovable (mass <= 0) terrain that never calls
+        // Integrate() anyway, so its velocity is inert regardless.
+        if (correction.x != 0.0f) velocity.x = 0.0f;
+        if (correction.y != 0.0f) velocity.y = 0.0f;
+
+        // correction.y < 0 means THIS body got pushed up out of the
+        // overlap -- i.e. `other` was underneath it. Same convention
+        // ResolveWindowBounds uses below. Only self's grounded state is
+        // updated (matching the self-vs-other asymmetry the rest of this
+        // method already has) -- call it from whichever body cares about
+        // standing on the other, e.g. player:ResolveCollisionWith(floor).
+        if (correction.y < 0.0f) m_Grounded = true;
+
         return true;
     }
     
@@ -117,9 +173,17 @@ public:
         transform.position += correction;
         if (correction.x != 0.0f) velocity.x = 0.0f;
         if (correction.y != 0.0f) velocity.y = 0.0f;
+
+        // Same grounded convention as ResolveCollisionWith: correction.y
+        // < 0 means we were pushed up off the window's bottom edge, i.e.
+        // resting on the "floor" the window bounds represent.
+        if (correction.y < 0.0f) m_Grounded = true;
+
         return true;
     }
 
 private:
     Vector2 m_ForceAccum;
+    bool m_Grounded = false;
+    inline static Vector2 s_Gravity = Vector2::Zero();
 };

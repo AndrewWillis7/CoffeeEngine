@@ -11,6 +11,7 @@
 #include "Scripting/PlayerActorConfigBindings.h"
 #include "Scripting/ActorRegistryBindings.h"
 #include "Scripting/InputBindings.h"
+#include "Scripting/PhysicsBindings.h"
 #include "Input/KeyMap.h"
 
 #include <iostream>
@@ -49,6 +50,21 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     m_Lua = luaL_newstate();
     luaL_openlibs(m_Lua);
 
+    // Make require() resolve against scripts/ as its root, so game code can
+    // split into modules (require("objects.Player") -> scripts/objects/Player.lua)
+    // instead of one monolithic main.lua. Prepended (not replaced) so the
+    // stock search locations luaL_openlibs already set up still work too.
+    // Engine-level infrastructure, same reasoning as KeyMap owning the
+    // hardcoded "scripts/keycodes.lua" path below -- a game script
+    // shouldn't have to remember to set this up itself.
+    lua_getglobal(m_Lua, "package");
+    lua_getfield(m_Lua, -1, "path");
+    std::string newPath = std::string("scripts/?.lua;scripts/?/init.lua;") + lua_tostring(m_Lua, -1);
+    lua_pop(m_Lua, 1);
+    lua_pushstring(m_Lua, newPath.c_str());
+    lua_setfield(m_Lua, -2, "path");
+    lua_pop(m_Lua, 1); // pop package table
+
     KeyMap::LoadAndExposeToLua(m_Lua, "scripts/keycodes.lua");
 
     // Binding Engine Subsystems
@@ -62,6 +78,7 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     PlayerActorConfigBindings::Register(m_Lua, context.actors);
     ActorRegistryBindings::Register(m_Lua, context.actors);
     InputBindings::Register(m_Lua, context.input);
+    PhysicsBindings::Register(m_Lua);
     // Future Actor Bindings
     // Future Sprite Bindings
 

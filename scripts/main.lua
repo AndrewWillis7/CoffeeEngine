@@ -1,14 +1,15 @@
+local Player = require("objects.Player")
+
 function Init()
     print("Engine Initialized")
     SetClearColor(0.05, 0.05, 0.08)
 
-    square = RigidBody2D.new(400, 300, 50, 50)
-    square:SetColor(1.0, 1.0, 1.0, 1.0)
-    square:SetCollisionShape(CollisionShape2D.NewBox(25, 25))
+    -- Engine-wide gravity (px/s^2), C++-applied to every non-static
+    -- (mass > 0) body's Integrate() call. Defaults to zero if never set --
+    -- this is what opts the level into being a sidescroller.
+    Physics.SetGravity(0, 980)
 
-    playerCfg = PlayerActorConfig.new()
-    playerCfg:SetMoveSpeed(250)
-    square:SetPlayerConfig(playerCfg)
+    player = Player.new(400, 300, 50, 50)
 
     wall = RigidBody2D.new(600, 300, 30, 200)
     wall:SetColor(0.6, 0.2, 0.2, 1.0)
@@ -19,30 +20,35 @@ function Init()
     crate:SetColor(0.7, 0.6, 0.2, 1.0)
     crate:SetCollisionShape(CollisionShape2D.NewBox(20, 20))
     crate:SetMass(1)
+
+    -- Floor for the player (and crate) to land on -- mass 0, same
+    -- "immovable" convention the wall above already uses. Sized to span
+    -- the window width and sit right at its bottom edge (800x600 window).
+    floor = RigidBody2D.new(400, 580, 800, 40)
+    floor:SetColor(0.3, 0.5, 0.3, 1.0)
+    floor:SetCollisionShape(CollisionShape2D.NewBox(400, 20))
+    floor:SetMass(0)
+
+    -- What the player resolves collisions against each frame. Plain array
+    -- so adding a new piece of level geometry is a one-line change here,
+    -- not a new player:ResolveCollisionWith(...) call in Update() below.
+    solids = {floor, wall, crate}
 end
 
 function Update(deltaTime)
-    local player = Actors.GetPlayer()
-    if player then
-        local dx, dy = 0, 0
-        if Input.IsKeyDown(Keys.W) then dy = dy - 1 end
-        if Input.IsKeyDown(Keys.S) then dy = dy + 1 end
-        if Input.IsKeyDown(Keys.A) then dx = dx - 1 end
-        if Input.IsKeyDown(Keys.D) then dx = dx + 1 end
+    player:Update(deltaTime, solids)
 
-        local len = math.sqrt(dx * dx + dy * dy)
-        if len > 0 then dx, dy = dx / len, dy / len end
+    -- Crate is also mass > 0, so it falls under the same C++-driven
+    -- gravity as the player -- this is what "gravity applies to all
+    -- non-static physics objects" means in practice: any body whose
+    -- Integrate() gets called feels it, no per-body opt-in code needed.
+    crate:Integrate(deltaTime)
+    crate:ResolveWindowBounds(eWindow:GetWidth(), eWindow:GetHeight())
+    crate:ResolveCollisionWith(floor)
+    crate:ResolveCollisionWith(wall)
 
-        local speed = player:GetPlayerConfig():GetMoveSpeed()
-        player:SetVelocity(dx * speed, dy * speed)
-        player:Integrate(deltaTime)
-
-        player:ResolveWindowBounds(eWindow:GetWidth(), eWindow:GetHeight())
-        player:ResolveCollisionWith(wall)
-        player:ResolveCollisionWith(crate)
-    end
-
-    DrawBody(square)
+    player:Draw()
     DrawBody(wall)
     DrawBody(crate)
+    DrawBody(floor)
 end

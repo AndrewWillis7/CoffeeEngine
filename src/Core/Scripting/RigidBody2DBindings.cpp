@@ -210,6 +210,17 @@ int Lua_IsPlayer(lua_State* L) {
     return 1;
 }
 
+// body:IsGrounded() -- true if a ResolveCollisionWith/ResolveWindowBounds
+// call since the last Integrate() found this body resting on something
+// below it. Typical use: gate a jump on this so it only fires while
+// standing on the floor. See the comment on RigidBody2D::Integrate() for
+// exactly when this gets reset vs. refreshed each frame.
+int Lua_IsGrounded(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    lua_pushboolean(L, self->IsGrounded());
+    return 1;
+}
+
 // body:ResolveCollisionWith(otherBody) -- if overlapping, pushes both
 // bodies apart (mass-weighted; mass <= 0 means immovable, e.g. a wall).
 // Box shapes only for now. Returns true if the bodies were overlapping.
@@ -254,6 +265,7 @@ const luaL_Reg kMethods[] = {
     {"SetPlayerConfig", Lua_SetPlayerConfig},
     {"GetPlayerConfig", Lua_GetPlayerConfig},
     {"IsPlayer", Lua_IsPlayer},
+    {"IsGrounded", Lua_IsGrounded},
     {"ResolveCollisionWith", Lua_ResolveCollisionWith},
     {"ResolveWindowBounds", Lua_ResolveWindowBounds},
     {nullptr, nullptr}
