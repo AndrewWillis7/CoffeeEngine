@@ -62,35 +62,32 @@ Vector2 UIPanel::PlaceWidget(float width, float height) {
     return {x, y};
 }
 
-bool UIPanel::Button(const std::string& label) {
+UIPanel::Rect UIPanel::PlaceRowWidget(float height) {
     float x = m_SameLineQueued ? (m_PrevRight + kPadding * 0.5f) : (kX + kPadding);
     float width = (kX + kWidth) - kPadding - x;
-    Vector2 pos = PlaceWidget(width, kRowHeight - 6.0f);
-    Vector2 size{width, kRowHeight - 6.0f};
+    Vector2 pos = PlaceWidget(width, height);
+    return {pos, {width, height}};
+}
 
-    bool hovered = MouseOver(pos, size);
+bool UIPanel::Button(const std::string& label) {
+    Rect r = PlaceRowWidget(kRowHeight - 6.0f);
+    bool hovered = MouseOver(r.pos, r.size);
     bool clicked = hovered && m_MousePressedThisFrame;
     Color color = clicked ? g_WidgetStyle.fillActive : hovered ? g_WidgetStyle.fillHover : g_WidgetStyle.fill;
-
-    m_Items.push_back({Item::Kind::Rect, pos, size, color, nullptr, label});
+    m_Items.push_back({Item::Kind::Rect, r.pos, r.size, color, nullptr, label});
     return clicked;
 }
 
 bool UIPanel::Toggle(const std::string& label, bool* value) {
-    float x = m_SameLineQueued ? (m_PrevRight + kPadding * 0.5f) : (kX + kPadding);
-    float width = (kX + kWidth) - kPadding - x;
-    Vector2 pos = PlaceWidget(width, kRowHeight - 6.0f);
-    Vector2 size{width, kRowHeight - 6.0f};
-
-    bool hovered = MouseOver(pos, size);
+    Rect r = PlaceRowWidget(kRowHeight - 6.0f);
+    bool hovered = MouseOver(r.pos, r.size);
     bool changed = false;
     if (hovered && m_MousePressedThisFrame) {
         *value = !*value;
         changed = true;
     }
-
     Color color = *value ? g_WidgetStyle.fillActive : g_WidgetStyle.fill;
-    m_Items.push_back({Item::Kind::Rect, pos, size, color, nullptr, label + (*value ? " [on]" : " [off]")});
+    m_Items.push_back({Item::Kind::Rect, r.pos, r.size, color, nullptr, label + (*value ? " [on]" : " [off]")});
     return changed;
 }
 

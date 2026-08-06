@@ -220,6 +220,18 @@ int Lua_ResolveCollisionWith(lua_State* L) {
     return 1;
 }
 
+// body:ResolveWindowBounds(windowWidth, windowHeight) -- clamps the body
+// fully inside [0,0]..[windowWidth,windowHeight], zeroing velocity on
+// whichever axis got clamped. Typical use: eWindow:GetWidth()/GetHeight()
+// for the current window size. Returns true if a clamp happened.
+int Lua_ResolveWindowBounds(lua_State* L) {
+    RigidBody2D* self = CheckSelf(L, 1);
+    float width = static_cast<float>(luaL_checknumber(L, 2));
+    float height = static_cast<float>(luaL_checknumber(L, 3));
+    lua_pushboolean(L, self->ResolveWindowBounds(width, height));
+    return 1;
+}
+
 const luaL_Reg kMethods[] = {
     {"AddForce", Lua_AddForce},
     {"Integrate", Lua_Integrate},
@@ -243,6 +255,7 @@ const luaL_Reg kMethods[] = {
     {"GetPlayerConfig", Lua_GetPlayerConfig},
     {"IsPlayer", Lua_IsPlayer},
     {"ResolveCollisionWith", Lua_ResolveCollisionWith},
+    {"ResolveWindowBounds", Lua_ResolveWindowBounds},
     {nullptr, nullptr}
 };
 

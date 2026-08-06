@@ -162,7 +162,7 @@ Font::Font() {
         }
     }
 
-    m_Atlas = std::make_unique<Texture>(pixels.data(), atlasW, atlasH, Texture::Format::Alpha);
+    m_Atlas = std::make_unique<Texture>(pixels.data(), atlasW, atlasH, Texture::Format::Alpha, Texture::Filter::Nearest);
 }
 
 Font::~Font() = default;

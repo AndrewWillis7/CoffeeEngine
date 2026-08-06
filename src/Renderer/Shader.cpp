@@ -5,6 +5,8 @@
 
 namespace {
 
+GLuint s_CurrentProgram = 0;
+
 // Compiles in a single stage and returns its GL handle, or 0 on failure
 GLuint CompileStage(GLenum stage, const std::string& source, const char* stageName) {
     GLuint handle = GL::CreateShader(stage);
@@ -71,22 +73,30 @@ Shader::~Shader() {
 }
 
 void Shader::Bind() const {
-    if (m_Program) {
+    if (m_Program && s_CurrentProgram != m_Program) {
         GL::UseProgram(m_Program);
+        s_CurrentProgram = m_Program;
     }
 }
 
 void Shader::Unbind() {
     GL::UseProgram(0);
+    s_CurrentProgram = 0;
 }
 
 int Shader::GetUniformLocation(const std::string& name) {
     auto it = m_UniformLocationCache.find(name);
-    if (it != m_UniformLocationCache.end()) {
-        return it->second;
-    }
+    if (it != m_UniformLocationCache.end()) return it->second;
     int location = GL::GetUniformLocation(m_Program, name.c_str());
     m_UniformLocationCache[name] = location;
+    return location;
+}
+
+int Shader::GetAttribLocation(const std::string& name) {
+    auto it = m_AttribLocationCache.find(name);
+    if (it != m_AttribLocationCache.end()) return it->second;
+    int location = GL::GetAttribLocation(m_Program, name.c_str());
+    m_AttribLocationCache[name] = location;
     return location;
 }
 

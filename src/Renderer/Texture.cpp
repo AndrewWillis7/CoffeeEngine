@@ -3,7 +3,7 @@
 #include <iostream>
 #include "../OS_/stb_image.h"
 
-Texture::Texture(const std::string& filepath) {
+Texture::Texture(const std::string& filepath, Filter filter) {
     int channels = 0;
     // NOT flipped, unlike the usual OpenGL-tutorial advice: this engine's
     // vertex shader (BuiltInShaders::QuadVertexSrc) uses a top-left-origin,
@@ -18,20 +18,22 @@ Texture::Texture(const std::string& filepath) {
         std::cerr << "Engine Warning: Texture failed to load '" << filepath << "'\n";
         return;
     }
-    Upload(data, GL_RGBA);
+    Upload(data, GL_RGBA, filter);
     stbi_image_free(data);
 }
 
-Texture::Texture(const unsigned char* pixels, int width, int height, Format format)
+Texture::Texture(const unsigned char* pixels, int width, int height, Format format, Filter filter)
     : m_Width(width), m_Height(height) {
-    Upload(pixels, format == Format::Alpha ? GL_ALPHA : GL_RGBA);
+    Upload(pixels, format == Format::Alpha ? GL_ALPHA : GL_RGBA, filter);
 }
 
-void Texture::Upload(const unsigned char* pixels, unsigned int glFormat) {
+void Texture::Upload(const unsigned char* pixels, unsigned int glFormat, Filter filter) {
+    GLint glFilter = (filter == Filter::Nearest) ? GL_NEAREST : GL_LINEAR;
+
     glGenTextures(1, &m_Handle);
     glBindTexture(GL_TEXTURE_2D, m_Handle);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glFilter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glFilter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(glFormat), m_Width, m_Height, 0, glFormat, GL_UNSIGNED_BYTE, pixels);

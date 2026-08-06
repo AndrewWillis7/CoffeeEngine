@@ -11,6 +11,7 @@
 #include "Scripting/PlayerActorConfigBindings.h"
 #include "Scripting/ActorRegistryBindings.h"
 #include "Scripting/InputBindings.h"
+#include "Input/KeyMap.h"
 
 #include <iostream>
 
@@ -48,6 +49,8 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     m_Lua = luaL_newstate();
     luaL_openlibs(m_Lua);
 
+    KeyMap::LoadAndExposeToLua(m_Lua, "scripts/keycodes.lua");
+
     // Binding Engine Subsystems
     GraphicsBindings::Register(m_Lua, context.graphics);
     WindowBindings::Register(m_Lua, context.window);
@@ -70,6 +73,7 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     }
 
     CallIfExists(m_Lua, "Init", 0);
+    KeyMap::SyncFromLua(m_Lua);
 }
 
 void ScriptEngine::Update(float deltaTime) {

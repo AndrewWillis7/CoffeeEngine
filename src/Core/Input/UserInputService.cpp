@@ -25,6 +25,7 @@ void UserInputService::OnWindowEvent(const WindowEvent& event) {
             m_MouseButtonsDown.erase(event.button);
             m_MouseButtonsReleasedThisFrame.insert(event.button);
             m_MousePosition = Vector2(static_cast<float>(event.mouseX), static_cast<float>(event.mouseY));
+            break;
 
         case WindowEvent::Type::MouseMoved:
             m_MousePosition = Vector2(static_cast<float>(event.mouseX), static_cast<float>(event.mouseY));

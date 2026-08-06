@@ -81,6 +81,10 @@ int main() {
         renderer2D.BeginFrame(deltaTime);
         scriptEngine.Update(deltaTime);
 
+        // Wire Engine Debug UI
+        engineUI.Update(window->GetHeight());
+        engineUI.Draw();
+
         graphicsContext->SwapBuffers();
 
         // Clear this-frame Pressed/Released edges now that scripts have had

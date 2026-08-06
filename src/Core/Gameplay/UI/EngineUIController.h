@@ -17,7 +17,7 @@ public:
     bool IsOpen() const { return m_Open; }
 
 private:
-    static constexpr int kBacktickKeycode = 49; // X11, US layout -- confirm via GetKeysPressedThisFrame() if it doesn't fire
+    int m_ToggleKeycode;
 
     ActorRegistry& m_Actors;
     UserInputService& m_Input;

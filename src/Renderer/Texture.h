@@ -4,9 +4,10 @@
 class Texture {
 public:
     enum class Format { RGBA, Alpha };
+    enum class Filter {Linear, Nearest};
 
-    explicit Texture(const std::string& filepath);                             // load from disk
-    Texture(const unsigned char* pixels, int width, int height, Format format); // build from memory (e.g. a font atlas)
+    explicit Texture(const std::string& filepath, Filter filter = Filter::Linear);                             // load from disk
+    Texture(const unsigned char* pixels, int width, int height, Format format, Filter filter = Filter::Linear); // build from memory (e.g. a font atlas)
     ~Texture();
 
     Texture(const Texture&) = delete;
@@ -18,7 +19,7 @@ public:
     int GetHeight() const { return m_Height; }
 
 private:
-    void Upload(const unsigned char* pixels, unsigned int glFormat);
+    void Upload(const unsigned char* pixels, unsigned int glFormat, Filter filter);
 
     unsigned int m_Handle = 0;
     int m_Width = 0, m_Height = 0;

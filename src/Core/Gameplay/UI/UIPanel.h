@@ -48,6 +48,7 @@ public:
     void TextBlock(const std::vector<std::string>& lines);
 
 private:
+    struct Rect {Vector2 pos, size;};
     struct Item {
         enum class Kind { Rect, Image } kind;
         Vector2 pos, size;
@@ -84,6 +85,8 @@ private:
     bool m_MousePressedThisFrame = false;
 
     std::vector<Item> m_Items;
+
+    Rect PlaceRowWidget(float height);
 
     void DrawGlyphString(const std::string& text, Vector2 pos, const Color& color);
     std::unique_ptr<Font> m_Font;

@@ -82,6 +82,44 @@ public:
         return true;
     }
     
+    // Clamps this body fully inside [0,0]..[windowWidth,windowHeight] -- an
+    // absolute world boundary rather than a pushable collision, so unlike
+    // ResolveCollisionWith this ignores mass entirely (a wall placed
+    // half-offscreen on purpose still gets clamped if you call this on it;
+    // in practice you'll only call it on bodies you actually want confined,
+    // typically just the player).
+    //
+    // Uses the attached CollisionShape2D's world AABB if one is set
+    // (GetWorldAABB already handles Circle by giving its bounding square),
+    // otherwise falls back to a box centered on `size`. Zeroes velocity on
+    // whichever axis got clamped, same "stop dead at the wall" behavior
+    // ResolveCollisionWith gives you against a mass<=0 body, so the player
+    // doesn't keep pushing into the edge and jitter every frame.
+    //
+    // Returns true if a clamp happened this call.
+    bool ResolveWindowBounds(float windowWidth, float windowHeight) {
+        AABB box = collisionShape
+            ? collisionShape->GetWorldAABB(transform)
+            : AABB{transform.position, size * 0.5f};
+
+        Vector2 min = box.Min();
+        Vector2 max = box.Max();
+        Vector2 correction = Vector2::Zero();
+
+        if (min.x < 0.0f)               correction.x = -min.x;
+        else if (max.x > windowWidth)   correction.x = windowWidth - max.x;
+
+        if (min.y < 0.0f)               correction.y = -min.y;
+        else if (max.y > windowHeight)  correction.y = windowHeight - max.y;
+
+        if (correction.x == 0.0f && correction.y == 0.0f) return false;
+
+        transform.position += correction;
+        if (correction.x != 0.0f) velocity.x = 0.0f;
+        if (correction.y != 0.0f) velocity.y = 0.0f;
+        return true;
+    }
+
 private:
     Vector2 m_ForceAccum;
 };

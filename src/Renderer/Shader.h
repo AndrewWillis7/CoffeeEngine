@@ -26,6 +26,7 @@ public:
     void SetVec4(const std::string& name, float x, float y, float z, float w);
 
     void SetInt(const std::string& name, int value);
+    int GetAttribLocation(const std::string& name);
 
     // Sets how much bigger than the RigidBody2D's logical size to fraw the quad
     float overdrawScale = 1.0f;
@@ -35,4 +36,5 @@ private:
 
     unsigned int m_Program = 0;
     std::unordered_map<std::string, int> m_UniformLocationCache;
+    std::unordered_map<std::string, int> m_AttribLocationCache;
 };
