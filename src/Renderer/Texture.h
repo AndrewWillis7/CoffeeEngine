@@ -18,9 +18,14 @@ public:
     int GetWidth() const { return m_Width; }
     int GetHeight() const { return m_Height; }
 
+    // Re-uploads a sub-rectangle without touching the rest of the texture.
+    // Pixels must point at the (x, y) texel within a buffer that is GetWidth() texels wide
+    void UpdateRegion(int x, int y, int w, int h, const unsigned char* pixels);
+
 private:
     void Upload(const unsigned char* pixels, unsigned int glFormat, Filter filter);
 
     unsigned int m_Handle = 0;
     int m_Width = 0, m_Height = 0;
+    unsigned int m_GLFormat = 0; // Set by Upload(), reused by UpdateRegion()
 };

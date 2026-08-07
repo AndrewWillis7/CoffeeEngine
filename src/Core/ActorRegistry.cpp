@@ -6,6 +6,7 @@
 #include "Renderer/Shader.h"
 #include "Renderer/BuiltInShaders.h"
 #include "Renderer/ShaderLibrary.h"
+#include "Renderer/PixelSprite.h"
 #include <sstream>
 #include <iostream>
 
@@ -92,6 +93,18 @@ RigidBody2D* ActorRegistry::GetPlayerActor() const {
         if (body->playerConfig) return body.get();
     }
     return nullptr;
+}
+
+PixelSprite* ActorRegistry::GetOrLoadPixelSprite(const std::string& filepath) {
+    auto it = m_PixelSprites.find(filepath);
+    if (it != m_PixelSprites.end()) return it->second.get();
+
+    auto sprite = std::make_unique<PixelSprite>(filepath);
+    if (!sprite->IsValid()) return nullptr; // PixelSprite's own constructor already logged why
+
+    PixelSprite* raw = sprite.get();
+    m_PixelSprites[filepath] = std::move(sprite);
+    return raw;
 }
 
 void ActorRegistry::DumpTree() const {

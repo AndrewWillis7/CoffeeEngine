@@ -6,6 +6,7 @@
 
 class Shader;
 class PlayerActorConfig;
+class PixelSprite;
 
 // Minimal liner-motion body: velocity + accumulated force, integrated with
 // semi-implicit Euler. No collision response (for now...) -- collisionShape
@@ -25,6 +26,12 @@ public:
     // owned and kept alive by ActorRegistry.
     CollisionShape2D* collisionShape = nullptr;
     PlayerActorConfig* playerConfig = nullptr;
+
+    // Non-owning, same lifetime convention as `shader`/`collisionShape`
+    // above. When set, DrawBody() (see ScriptBindings.cpp) draws this
+    // body's texture instead of a flat color quad, flushing any pending
+    // SetPixel/PunchCircle edits first.
+    PixelSprite* sprite = nullptr;
 
     Vector2 velocity;
     float mass = 1.0f;

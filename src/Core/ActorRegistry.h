@@ -8,6 +8,7 @@ class RigidBody2D;
 class Shader;
 class CollisionShape2D;
 class PlayerActorConfig;
+class PixelSprite;
 
 // Owns the Rigidbody2D, Shader, CollisionShape2D, and PlayerActorConfig
 // instances created from LUA. Outlives the individual script calls but
@@ -23,6 +24,12 @@ public:
     Shader* CreateShader(const std::string& vertexSrc, const std::string& fragmentSrc);
     Shader* CreateGlowShader();
     Shader* GetOrCreateNamedShader(const std::string& name);
+
+    // Loads (or returns the already-loaded) PixelSprite for a given PNG
+    // path, keyed by that path string -- same "load once, cache by key"
+    // shape as GetOrCreateNamedShader. Returns nullptr if the PNG failed
+    // to load (see PixelSprite's own constructor for the warning).
+    PixelSprite* GetOrLoadPixelSprite(const std::string& filepath);
 
     CollisionShape2D* CreateBoxCollisionShape(float halfWidth, float halfHeight, float offsetX = 0.0f, float offsetY = 0.0f);
     CollisionShape2D* CreateCircleCollisionShape(float radius, float offsetX = 0.0f, float offsetY = 0.0f);
@@ -49,4 +56,10 @@ private:
     std::vector<std::unique_ptr<PlayerActorConfig>> m_PlayerConfigs;
     std::vector<std::unique_ptr<Shader>> m_Shaders;
     std::unordered_map<std::string, std::unique_ptr<Shader>> m_NamedShaders;
+
+    // Same "not cleared by Clear()" convention as m_NamedShaders -- these
+    // are expensive-to-decode engine assets, not Lua-ephemeral gameplay
+    // instances, so a script hot-reload shouldn't force every destructible
+    // sprite to reload (and lose whatever's already been punched out of it).
+    std::unordered_map<std::string, std::unique_ptr<PixelSprite>> m_PixelSprites;
 };

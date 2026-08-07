@@ -17,7 +17,8 @@ function Init()
     wall:SetMass(0)
 
     crate = RigidBody2D.new(250, 400, 40, 40)
-    crate:SetColor(0.7, 0.6, 0.2, 1.0)
+    crateSprite = Sprite.Load("Art/crate.png")
+    crate:SetSprite(crateSprite)
     crate:SetCollisionShape(CollisionShape2D.NewBox(20, 20))
     crate:SetMass(1)
 

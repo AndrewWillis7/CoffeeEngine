@@ -28,6 +28,7 @@ Texture::Texture(const unsigned char* pixels, int width, int height, Format form
 }
 
 void Texture::Upload(const unsigned char* pixels, unsigned int glFormat, Filter filter) {
+    m_GLFormat = glFormat;
     GLint glFilter = (filter == Filter::Nearest) ? GL_NEAREST : GL_LINEAR;
 
     glGenTextures(1, &m_Handle);
@@ -46,4 +47,22 @@ Texture::~Texture() {
 
 void Texture::Bind() const {
     glBindTexture(GL_TEXTURE_2D, m_Handle);
+}
+
+void Texture::UpdateRegion(int x, int y, int w, int h, const unsigned char* pixels) {
+    if (!m_Handle || w <= 0 || h <= 0) return;
+
+    glBindTexture(GL_TEXTURE_2D, m_Handle);
+    // GL_UNPACK_ROW_LENGTH tells GL the source buffer's full row width in
+    // texels, so it can stride through `pixels` (which points at the (x,y)
+    // texel of a GetWidth()-wide buffer, not a tightly-packed w*h buffer)
+    // without the caller needing to memcpy a sub-copy first.
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, m_Width);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, static_cast<GLenum>(m_GLFormat), GL_UNSIGNED_BYTE, pixels);
+    // GL_UNPACK_ROW_LENGTH is global GL state, not per-texture -- reset it
+    // to the default (0 = "tightly packed") so it doesn't silently corrupt
+    // some other Texture/Font upload that runs later and assumes default
+    // unpack state.
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }

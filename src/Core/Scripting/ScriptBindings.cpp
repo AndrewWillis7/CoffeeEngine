@@ -12,6 +12,7 @@
 #include "Core/Input/UserInputService.h"
 #include "Renderer/Shader.h"
 #include "Renderer/Renderer2D.h"
+#include "Renderer/PixelSprite.h"
 #include "IGraphicsContext.h"
 #include "IWindow.h"
 
@@ -35,6 +36,7 @@ namespace LuaBinding {
     template <> struct MetatableOf<CollisionShape2D>    { static constexpr const char* name = "Coffee.CollisionShape2D"; };
     template <> struct MetatableOf<PlayerActorConfig>   { static constexpr const char* name = "Coffee.PlayerActorConfig"; };
     template <> struct MetatableOf<IWindow>             { static constexpr const char* name = "Coffee.IWindow"; };
+    template <> struct MetatableOf<PixelSprite>         { static constexpr const char* name = "Coffee.PixelSprite"; };
 
     template <> struct IsValueType<Vector2> : std::true_type {};
 
@@ -172,6 +174,23 @@ int Lua_RigidBody2DIsPlayer(lua_State* L) {
     return 1;
 }
 
+int Lua_RigidBody2DGetSprite(lua_State* L) {
+    LuaBinding::Value<PixelSprite*>::Push(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->sprite);
+    return 1;
+}
+
+// Hand-written rather than a plain PtrProperty because attaching a sprite
+// also defaults the body's draw size to the sprite's native pixel size --
+// PtrProperty's generated setter is a bare field assignment with no room
+// for that. SetSize() afterward still overrides this like any other body.
+int Lua_RigidBody2DSetSprite(lua_State* L) {
+    RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
+    PixelSprite* sprite = LuaBinding::Value<PixelSprite*>::Get(L, 2);
+    self->sprite = sprite;
+    if (sprite) self->size = Vector2(static_cast<float>(sprite->GetWidth()), static_cast<float>(sprite->GetHeight()));
+    return 0;
+}
+
 void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Class<RigidBody2D>(L, LuaBinding::MetatableOf<RigidBody2D>::name)
         .Raw("GetPosition", &Lua_RigidBody2DGetPosition)
@@ -180,6 +199,8 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .Raw("SetRotation", &Lua_RigidBody2DSetRotation)
         .Raw("SetColor", &Lua_RigidBody2DSetColor)
         .Raw("IsPlayer", &Lua_RigidBody2DIsPlayer)
+        .Raw("GetSprite", &Lua_RigidBody2DGetSprite)
+        .Raw("SetSprite", &Lua_RigidBody2DSetSprite)
         .Vec2Property<&RigidBody2D::velocity>("GetVelocity", "SetVelocity")
         .Vec2Property<&RigidBody2D::size>("GetSize", "SetSize")
         .Property<&RigidBody2D::mass>("GetMass", "SetMass")
@@ -271,6 +292,67 @@ void RegisterCollisionShape2D(lua_State* L, ActorRegistry* actors) {
 }
 
 // =====================================================================
+// PixelSprite -- pointer type, owned by ActorRegistry (see the
+// m_PixelSprites comment in ActorRegistry.h for why it's exempt from
+// Clear()). GetWidth/GetHeight/Flush map 1:1 onto methods; PunchCircle/
+// SetPixel/IsSolid take plain numbers rather than a Vector2/Color
+// userdata (matches every other hot-path scalar-shaped call in this
+// file, e.g. Lua_RigidBody2DSetColor), so all three stay hand-written.
+// =====================================================================
+
+int Lua_PixelSpriteLoad(lua_State* L) {
+    const char* filepath = luaL_checkstring(L, 1);
+
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(1)));
+    luaL_argcheck(L, actors != nullptr, 1, "engine has no ActorRegistry bound");
+
+    LuaBinding::Value<PixelSprite*>::Push(L, actors->GetOrLoadPixelSprite(filepath));
+    return 1;
+}
+
+int Lua_PixelSpritePunchCircle(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    int cx = static_cast<int>(luaL_checknumber(L, 2));
+    int cy = static_cast<int>(luaL_checknumber(L, 3));
+    float radius = static_cast<float>(luaL_checknumber(L, 4));
+    self->PunchCircle(cx, cy, radius);
+    return 0;
+}
+
+int Lua_PixelSpriteSetPixel(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    int x = static_cast<int>(luaL_checknumber(L, 2));
+    int y = static_cast<int>(luaL_checknumber(L, 3));
+    float r = static_cast<float>(luaL_checknumber(L, 4));
+    float g = static_cast<float>(luaL_checknumber(L, 5));
+    float b = static_cast<float>(luaL_checknumber(L, 6));
+    float a = static_cast<float>(luaL_optnumber(L, 7, 1.0));
+    self->SetPixel(x, y, Color(r, g, b, a));
+    return 0;
+}
+
+int Lua_PixelSpriteIsSolid(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    int x = static_cast<int>(luaL_checknumber(L, 2));
+    int y = static_cast<int>(luaL_checknumber(L, 3));
+    lua_pushboolean(L, self->IsSolid(x, y));
+    return 1;
+}
+
+void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
+    LuaBinding::Class<PixelSprite>(L, LuaBinding::MetatableOf<PixelSprite>::name)
+        .Method<&PixelSprite::GetWidth>("GetWidth")
+        .Method<&PixelSprite::GetHeight>("GetHeight")
+        .Method<&PixelSprite::Flush>("Flush")
+        .Raw("PunchCircle", &Lua_PixelSpritePunchCircle)
+        .Raw("SetPixel", &Lua_PixelSpriteSetPixel)
+        .Raw("IsSolid", &Lua_PixelSpriteIsSolid)
+        .Finish();
+
+    LuaBinding::Table(L).RawWithContext("Load", actors, &Lua_PixelSpriteLoad).Finish("Sprite");
+}
+
+// =====================================================================
 // PlayerActorConfig -- pointer type, owned by ActorRegistry. Every field
 // is a direct public float/bool, so this whole binding is Property<>
 // calls plus a zero-arg factory.
@@ -338,22 +420,43 @@ void RegisterWindow(lua_State* L, IWindow* window) {
 }
 
 // =====================================================================
-// Renderer -- bare global DrawBody(body), bound to a captured Renderer2D*.
-// Pulls transform/size/color/shader off the RigidBody2D and forwards to
-// DrawQuad -- not a positional arg mapping, so it stays hand-written.
+// Renderer -- bare global DrawBody(body). Pulls transform/size/color/
+// shader off the RigidBody2D and forwards to DrawQuad, or -- if a
+// PixelSprite is attached -- flushes its pending edits and forwards to
+// DrawTexturedQuad instead. Needs both a Renderer2D* (to draw) and an
+// ActorRegistry* (to resolve the "Textured" named shader for sprite
+// bodies that never had an explicit shader set), so this bypasses
+// BindRawFunction/Table::RawWithContext -- both only support one
+// captured context pointer -- and pushes both closures by hand.
 // =====================================================================
 
 int Lua_DrawBody(lua_State* L) {
     auto* body = LuaBinding::Value<RigidBody2D*>::Get(L, 1);
     auto* renderer = static_cast<Renderer2D*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (renderer) {
-        renderer->DrawQuad(body->transform, body->size, body->color, body->shader);
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(2)));
+    if (!renderer) return 0;
+
+    if (body->sprite) {
+        // Uploads any SetPixel/PunchCircle edits made earlier this frame
+        // before we draw, so a punch and its DrawBody() in the same
+        // Update() call show up in the same frame instead of one frame late.
+        body->sprite->Flush();
+        Shader* texShader = body->shader ? body->shader : (actors ? actors->GetOrCreateNamedShader("Textured") : nullptr);
+        if (texShader) {
+            renderer->DrawTexturedQuad(body->transform, body->size, body->color, texShader, body->sprite->GetTexture());
+            return 0;
+        }
     }
+
+    renderer->DrawQuad(body->transform, body->size, body->color, body->shader);
     return 0;
 }
 
-void RegisterRenderer(lua_State* L, Renderer2D* renderer) {
-    LuaBinding::BindRawFunction(L, "DrawBody", renderer, &Lua_DrawBody);
+void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors) {
+    lua_pushlightuserdata(L, renderer);
+    lua_pushlightuserdata(L, actors);
+    lua_pushcclosure(L, &Lua_DrawBody, 2);
+    lua_setglobal(L, "DrawBody");
 }
 
 // =====================================================================
@@ -457,7 +560,8 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterVector2(L);
     RegisterRigidBody2D(L, context.actors);
     RegisterShader(L, context.actors);
-    RegisterRenderer(L, context.renderer);
+    RegisterPixelSprite(L, context.actors);
+    RegisterRenderer(L, context.renderer, context.actors);
     RegisterCollisionShape2D(L, context.actors);
     RegisterPlayerActorConfig(L, context.actors);
     RegisterActorRegistry(L, context.actors);
