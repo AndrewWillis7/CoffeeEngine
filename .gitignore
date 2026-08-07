@@ -2,4 +2,4 @@
 *.o
 *.d
 engine_test
-.vscode
+.vscode/settings.json

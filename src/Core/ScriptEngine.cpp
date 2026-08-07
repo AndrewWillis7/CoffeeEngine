@@ -1,17 +1,7 @@
 #include "ScriptEngine.h"
 #include "EngineContext.h"
 #include "ActorRegistry.h"
-#include "Scripting/GraphicsBindings.h"
-#include "Scripting/WindowBindings.h"
-#include "Scripting/Vector2Bindings.h"
-#include "Scripting/RigidBody2DBindings.h"
-#include "Scripting/ShaderBindings.h"
-#include "Scripting/RendererBindings.h"
-#include "Scripting/CollisionShape2DBindings.h"
-#include "Scripting/PlayerActorConfigBindings.h"
-#include "Scripting/ActorRegistryBindings.h"
-#include "Scripting/InputBindings.h"
-#include "Scripting/PhysicsBindings.h"
+#include "Scripting/ScriptBindings.h"
 #include "Input/KeyMap.h"
 
 #include <iostream>
@@ -67,20 +57,10 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
 
     KeyMap::LoadAndExposeToLua(m_Lua, "scripts/keycodes.lua");
 
-    // Binding Engine Subsystems
-    GraphicsBindings::Register(m_Lua, context.graphics);
-    WindowBindings::Register(m_Lua, context.window);
-    Vector2Bindings::Register(m_Lua);
-    RigidBody2DBindings::Register(m_Lua, context.actors);
-    ShaderBindings::Register(m_Lua, context.actors);
-    RendererBindings::Register(m_Lua, context.renderer);
-    CollisionShape2DBindings::Register(m_Lua, context.actors);
-    PlayerActorConfigBindings::Register(m_Lua, context.actors);
-    ActorRegistryBindings::Register(m_Lua, context.actors);
-    InputBindings::Register(m_Lua, context.input);
-    PhysicsBindings::Register(m_Lua);
-    // Future Actor Bindings
-    // Future Sprite Bindings
+    // Binding Engine Subsystems -- see ScriptBindings.cpp for the actual
+    // per-type binding code (one file instead of one Register() call
+    // scattered across a dozen bindings headers).
+    ScriptBindings::RegisterAll(m_Lua, context);
 
     if (luaL_dofile(m_Lua, scriptPath.c_str()) != LUA_OK) {
         std::cerr << "Engine Fata: Failed to Load " << scriptPath << ": "
