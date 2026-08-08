@@ -2,6 +2,7 @@
 #include "Physics/RigidBody2D.h"
 #include "Physics/CollisionShape2D.h"
 #include "Gameplay/PlayerActorConfig.h"
+#include "Gameplay/Camera2D.h"
 #include "Math/Transform2D.h"
 #include "Renderer/Shader.h"
 #include "Renderer/BuiltInShaders.h"
@@ -95,6 +96,20 @@ RigidBody2D* ActorRegistry::GetPlayerActor() const {
     return nullptr;
 }
 
+Camera2D* ActorRegistry::CreateCamera() {
+    auto camera = std::make_unique<Camera2D>();
+    Camera2D* raw = camera.get();
+    m_Cameras.push_back(std::move(camera));
+    return raw;
+}
+
+RigidBody2D* ActorRegistry::GetActiveCamera() const {
+    for (const auto& body : m_Bodies) {
+        if (body->camera && body->camera->active) return body.get();
+    }
+    return nullptr;
+}
+
 PixelSprite* ActorRegistry::GetOrLoadPixelSprite(const std::string& filepath) {
     auto it = m_PixelSprites.find(filepath);
     if (it != m_PixelSprites.end()) return it->second.get();
@@ -126,6 +141,12 @@ void ActorRegistry::DumpTree() const {
             std::cout << "    - PlayerActorConfig: attached (moveSpeed=" << body->playerConfig->moveSpeed << ")\n";
         } else {
             std::cout << "    - PlayerActorConfig: none\n";
+        }
+        if (body->camera) {
+            std::cout << "    - Camera2D: attached (active=" << (body->camera->active ? "true" : "false")
+                       << " viewport=" << body->camera->viewportSize.x << "x" << body->camera->viewportSize.y << ")\n";
+        } else {
+            std::cout << "    - Camera2D: none\n";
         }
     }
 }
@@ -159,5 +180,6 @@ void ActorRegistry::Clear() {
     m_Shaders.clear();
     m_CollisionShapes.clear();
     m_PlayerConfigs.clear();
+    m_Cameras.clear();
     // m_NamedShaders intentionally NOT cleared -- see header comment.
 }

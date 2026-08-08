@@ -6,6 +6,7 @@
 #include "Core/Physics/RigidBody2D.h"
 #include "Core/Physics/CollisionShape2D.h"
 #include "Core/Gameplay/PlayerActorConfig.h"
+#include "Core/Gameplay/Camera2D.h"
 #include "Core/Math/Vector2.h"
 #include "Core/Math/Transform2D.h"
 #include "Core/Math/Color.h"
@@ -35,6 +36,7 @@ namespace LuaBinding {
     template <> struct MetatableOf<Shader>              { static constexpr const char* name = "Coffee.Shader"; };
     template <> struct MetatableOf<CollisionShape2D>    { static constexpr const char* name = "Coffee.CollisionShape2D"; };
     template <> struct MetatableOf<PlayerActorConfig>   { static constexpr const char* name = "Coffee.PlayerActorConfig"; };
+    template <> struct MetatableOf<Camera2D>            { static constexpr const char* name = "Coffee.Camera2D"; };
     template <> struct MetatableOf<IWindow>             { static constexpr const char* name = "Coffee.IWindow"; };
     template <> struct MetatableOf<PixelSprite>         { static constexpr const char* name = "Coffee.PixelSprite"; };
 
@@ -209,12 +211,14 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&RigidBody2D::shader>("GetShader", "SetShader")
         .PtrProperty<&RigidBody2D::collisionShape>("GetCollisionShape", "SetCollisionShape")
         .PtrProperty<&RigidBody2D::playerConfig>("GetPlayerConfig", "SetPlayerConfig")
+        .PtrProperty<&RigidBody2D::camera>("GetCamera", "SetCamera")
         .Method<&RigidBody2D::AddForce>("AddForce")
         .Method<&RigidBody2D::Integrate>("Integrate")
         .Method<&RigidBody2D::IsGrounded>("IsGrounded")
         .Method<&RigidBody2D::CollidesWith>("CollidesWith")
         .Method<&RigidBody2D::ResolveCollisionWith>("ResolveCollisionWith")
         .Method<&RigidBody2D::ResolveWindowBounds>("ResolveWindowBounds")
+        .Method<&RigidBody2D::UpdateCamera>("UpdateCamera")
         .Finish();
 
     LuaBinding::Table(L).RawWithContext("new", actors, &Lua_RigidBody2DNew).Finish("RigidBody2D");
@@ -369,6 +373,27 @@ void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
 }
 
 // =====================================================================
+// Camera2D -- pointer type, owned by ActorRegistry. viewportSize is a
+// direct Vector2 field (Vec2Property, same hot-path "two raw numbers"
+// convention as RigidBody2D::velocity/size); followTarget is a direct
+// RigidBody2D* field (PtrProperty, nil-clears-it setter, same convention
+// as RigidBody2D::shader/collisionShape/playerConfig); followSmoothing/
+// active are plain scalar fields. Nothing here needs a hand-written
+// trampoline.
+// =====================================================================
+
+void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
+    LuaBinding::Class<Camera2D>(L, LuaBinding::MetatableOf<Camera2D>::name)
+        .Vec2Property<&Camera2D::viewportSize>("GetViewportSize", "SetViewportSize")
+        .PtrProperty<&Camera2D::followTarget>("GetFollowTarget", "SetFollowTarget")
+        .Property<&Camera2D::followSmoothing>("GetFollowSmoothing", "SetFollowSmoothing")
+        .Property<&Camera2D::active>("IsActive", "SetActive")
+        .Finish();
+
+    LuaBinding::Table(L).Function<&ActorRegistry::CreateCamera>("new", actors).Finish("Camera2D");
+}
+
+// =====================================================================
 // Graphics -- bare globals (SetClearColor(...), not Graphics.SetClearColor),
 // bound to a captured IGraphicsContext*. SetClearColor maps 1:1 onto the
 // C++ method; DrawDebugQuad assembles a Transform2D/Vector2/Color out of
@@ -452,11 +477,40 @@ int Lua_DrawBody(lua_State* L) {
     return 0;
 }
 
+// SyncCamera() -- resolves ActorRegistry's currently-active camera (see
+// GetActiveCamera()) and pushes it into the renderer for the rest of this
+// frame's world-space draws, or clears it if no camera is active. Call
+// once per frame from Lua (after any camera-follow update, before your
+// Draw() calls) -- deliberately NOT done automatically inside DrawBody()
+// itself: that would re-resolve the active camera on every single object
+// drawn (an O(n) ActorRegistry scan per DrawBody call, O(n^2) per frame)
+// for a value that only actually needs recomputing once a frame. Same
+// two-upvalue hand-rolled closure as Lua_DrawBody above, for the same
+// reason (needs both a Renderer2D* and an ActorRegistry*).
+int Lua_SyncCamera(lua_State* L) {
+    auto* renderer = static_cast<Renderer2D*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(2)));
+    if (!renderer || !actors) return 0;
+
+    RigidBody2D* camBody = actors->GetActiveCamera();
+    if (camBody && camBody->camera) {
+        renderer->SetActiveCamera(camBody->transform.position, camBody->camera->viewportSize);
+    } else {
+        renderer->ClearActiveCamera();
+    }
+    return 0;
+}
+
 void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors) {
     lua_pushlightuserdata(L, renderer);
     lua_pushlightuserdata(L, actors);
     lua_pushcclosure(L, &Lua_DrawBody, 2);
     lua_setglobal(L, "DrawBody");
+
+    lua_pushlightuserdata(L, renderer);
+    lua_pushlightuserdata(L, actors);
+    lua_pushcclosure(L, &Lua_SyncCamera, 2);
+    lua_setglobal(L, "SyncCamera");
 }
 
 // =====================================================================
@@ -466,6 +520,7 @@ void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors)
 void RegisterActorRegistry(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L)
         .Function<&ActorRegistry::GetPlayerActor>("GetPlayer", actors)
+        .Function<&ActorRegistry::GetActiveCamera>("GetActiveCamera", actors)
         .Function<&ActorRegistry::DumpTree>("Dump", actors)
         .Finish("Actors");
 }
@@ -564,6 +619,7 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterRenderer(L, context.renderer, context.actors);
     RegisterCollisionShape2D(L, context.actors);
     RegisterPlayerActorConfig(L, context.actors);
+    RegisterCamera2D(L, context.actors);
     RegisterActorRegistry(L, context.actors);
     RegisterInput(L, context.input);
     RegisterPhysics(L);

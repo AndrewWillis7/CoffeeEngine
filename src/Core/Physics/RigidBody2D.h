@@ -3,6 +3,7 @@
 #include "../Math/Transform2D.h"
 #include "../Math/Color.h"
 #include "CollisionShape2D.h"
+#include "../Gameplay/Camera2D.h"
 
 class Shader;
 class PlayerActorConfig;
@@ -26,6 +27,13 @@ public:
     // owned and kept alive by ActorRegistry.
     CollisionShape2D* collisionShape = nullptr;
     PlayerActorConfig* playerConfig = nullptr;
+
+    // Non-owning, same lifetime convention as the pointers above. When
+    // set, this body IS a camera -- ActorRegistry::GetActiveCamera() will
+    // find it (if Camera2D::active) and Renderer2D will map world-space
+    // draws relative to this body's transform.position and the Camera2D's
+    // viewportSize. See UpdateCamera() below for the lerp-follow step.
+    Camera2D* camera = nullptr;
 
     // Non-owning, same lifetime convention as `shader`/`collisionShape`
     // above. When set, DrawBody() (see ScriptBindings.cpp) draws this
@@ -83,6 +91,18 @@ public:
 
         transform.position += velocity * dt;
         m_ForceAccum = Vector2::Zero();
+    }
+
+    // If a Camera2D is attached, lerps this body's own position toward
+    // camera->followTarget (a no-op otherwise -- no camera, no target, or
+    // followSmoothing <= 0). Mirrors Integrate()'s shape: a plain per-frame
+    // step method on the body, called explicitly from Lua once a frame
+    // (e.g. cameraBody:UpdateCamera(deltaTime)), same as Integrate()/
+    // ResolveWindowBounds() already are. Split out from Follow() itself
+    // (which lives on Camera2D, see its .cpp) only because that's where
+    // RigidBody2D's full definition is actually needed.
+    void UpdateCamera(float dt) {
+        if (camera) camera->Follow(*this, dt);
     }
 
     // True if both bodies have a collisionShape attached and those shapes

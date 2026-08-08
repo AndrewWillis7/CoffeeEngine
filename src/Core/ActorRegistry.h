@@ -9,6 +9,7 @@ class Shader;
 class CollisionShape2D;
 class PlayerActorConfig;
 class PixelSprite;
+class Camera2D;
 
 // Owns the Rigidbody2D, Shader, CollisionShape2D, and PlayerActorConfig
 // instances created from LUA. Outlives the individual script calls but
@@ -37,10 +38,20 @@ public:
     PlayerActorConfig* CreatePlayerConfig();
     size_t GetBodyCount() const {return m_Bodies.size();}
 
+    Camera2D* CreateCamera();
+
     // Scans all bodies for one with a PlayerActorConfig attached. Returns
     // nullptr if no body has been marked as the player yet. O(n) over
     // bodies -- fine at engine scale, revisit if actor counts get large.
     RigidBody2D* GetPlayerActor() const;
+
+    // Scans all bodies for one with an active Camera2D attached, same
+    // "O(n), fine at engine scale" convention as GetPlayerActor() just
+    // above. Returns nullptr if no body has an active camera yet -- in
+    // that case Renderer2D falls back to its legacy identity mapping
+    // (world pixels == screen pixels), so existing scripts that never
+    // create a camera keep drawing exactly as before.
+    RigidBody2D* GetActiveCamera() const;
 
     // Logs every RigidBody2D and what's attached to it (Shader,
     // CollisionShape, PlayerActorConfig) to stdout. Stand-in for a real
@@ -54,6 +65,7 @@ private:
     std::vector<std::unique_ptr<RigidBody2D>> m_Bodies;
     std::vector<std::unique_ptr<CollisionShape2D>> m_CollisionShapes;
     std::vector<std::unique_ptr<PlayerActorConfig>> m_PlayerConfigs;
+    std::vector<std::unique_ptr<Camera2D>> m_Cameras;
     std::vector<std::unique_ptr<Shader>> m_Shaders;
     std::unordered_map<std::string, std::unique_ptr<Shader>> m_NamedShaders;
 

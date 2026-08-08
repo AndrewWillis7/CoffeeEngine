@@ -3,18 +3,23 @@
 namespace BuiltInShaders {
 
 const char* QuadVertexSrc = R"GLSL(
-#version 120
+    #version 120
 
-attribute vec2 a_LocalPos;   // unit quad corner, range [-0.5, 0.5]
+    attribute vec2 a_LocalPos;   // unit quad corner, range [-0.5, 0.5]
 
-uniform vec2 u_Position;     // world-space center, pixels
-uniform vec2 u_Size;         // width/height, pixels (already includes overdraw)
-uniform float u_Rotation;    // radians
-uniform vec2 u_Resolution;   // window size, pixels
+    uniform vec2 u_Position;     // world-space center, pixels
+    uniform vec2 u_Size;         // width/height, pixels (already includes overdraw)
+    uniform float u_Rotation;    // radians
+    uniform vec2 u_Resolution;   // actual window size, pixels -- kept for any
+                                // fragment shader that wants real screen
+                                // pixels; NOT used for position math below
+                                // anymore, that's u_ViewportSize's job.
+    uniform vec2 u_CameraPos;    // world-space point mapped to screen center
+    uniform vec2 u_ViewportSize; // world units visible across the full window
 
-varying vec2 v_LocalPos;
+    varying vec2 v_LocalPos;
 
-void main() {
+    void main() {
     vec2 scaled = a_LocalPos * u_Size;
 
     float c = cos(u_Rotation);
@@ -23,11 +28,19 @@ void main() {
 
     vec2 worldPos = u_Position + rotated;
 
-    // Matches the legacy glOrtho(0, width, height, 0, -1, 1) convention:
+    // Position relative to the camera's center, then scaled by how many
+    // world units the viewport spans -- NOT the raw window resolution --
+    // so a small u_ViewportSize (e.g. 320x180) fills the whole window
+    // with those pixels blown up, independent of the window's actual
+    // size. Renderer2D::ApplyCommonUniforms feeds u_CameraPos/
+    // u_ViewportSize the window's own center/size when no camera is
+    // active (or for screen-space UI draws), which makes this reduce
+    // exactly to the old glOrtho(0, width, height, 0, -1, 1) mapping:
     // origin top-left, +y down.
+    vec2 relative = worldPos - u_CameraPos;
     vec2 ndc = vec2(
-        (worldPos.x / u_Resolution.x) * 2.0 - 1.0,
-        1.0 - (worldPos.y / u_Resolution.y) * 2.0
+        (relative.x / u_ViewportSize.x) * 2.0,
+        -(relative.y / u_ViewportSize.y) * 2.0
     );
 
     v_LocalPos = a_LocalPos;

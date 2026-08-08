@@ -129,7 +129,7 @@ void UIPanel::DrawGlyphString(const std::string& text, Vector2 pos, const Color&
     for (char c : text) {
         Font::GlyphUV uv = m_Font->GetGlyphUV(static_cast<unsigned char>(c));
         Vector2 glyphCenter{x + kGlyphDrawSize * 0.5f, pos.y + kGlyphDrawSize * 0.5f};
-        m_Renderer.DrawTexturedQuad({glyphCenter, 0.0f}, {kGlyphDrawSize, kGlyphDrawSize}, color,
+        m_Renderer.DrawScreenTexturedQuad({glyphCenter, 0.0f}, {kGlyphDrawSize, kGlyphDrawSize}, color,
                                      textShader, m_Font->GetAtlas(), uv.offset, uv.scale);
         x += kGlyphDrawSize + kGlyphSpacing;
     }
@@ -142,7 +142,7 @@ void UIPanel::Draw() {
 
     Shader* panelShader = m_Actors.GetOrCreateNamedShader("RoundedPanel");
     g_PanelStyle.ApplyTo(panelShader);
-    m_Renderer.DrawQuad(
+    m_Renderer.DrawScreenQuad(
         {{kX + kWidth * 0.5f, kMargin + m_PanelHeight * 0.5f}, 0.0f},
         {kWidth, m_PanelHeight}, g_PanelStyle.fill, panelShader);
 
@@ -162,12 +162,12 @@ void UIPanel::Draw() {
             continue;
 
         if (item.kind == Item::Kind::Image) {
-            m_Renderer.DrawTexturedQuad({drawCenter, 0.0f}, item.size, item.color, texShader, item.texture);
+            m_Renderer.DrawScreenTexturedQuad({drawCenter, 0.0f}, item.size, item.color, texShader, item.texture);
             continue;
         }
 
         if (item.color.a > 0.0f) {
-            m_Renderer.DrawQuad({drawCenter, 0.0f}, item.size, item.color, rectShader);
+            m_Renderer.DrawScreenQuad({drawCenter, 0.0f}, item.size, item.color, rectShader);
         }
 
         if (!item.text.empty()) {
