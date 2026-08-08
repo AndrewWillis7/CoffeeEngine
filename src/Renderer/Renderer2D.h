@@ -31,16 +31,40 @@ public:
 
     // Sets the camera that world-space draws (DrawQuad/DrawTexturedQuad,
     // below) map against for the rest of this frame (or until changed/
-    // cleared again) -- position is the world-space point mapped to the
-    // center of the screen, viewportSize is how many world units span the
-    // full window regardless of its actual pixel size (see Camera2D's
-    // header for why that's the "resolution control" knob). Screen-space
-    // draws (DrawScreenQuad/DrawScreenTexturedQuad) are never affected by
-    // this -- that's the whole point of the split, see those methods.
-    void SetActiveCamera(const Vector2& position, const Vector2& viewportSize);
+    // cleared again).
+    //   position     -- world-space point mapped to the center of the
+    //                    camera's own content rect (see below).
+    //   viewportSize -- how many world units span that content rect,
+    //                    regardless of its actual pixel size (see
+    //                    Camera2D's header for why that's the
+    //                    "resolution control" knob).
+    //   targetAspect -- optional (pass Vector2::Zero() for "unset").
+    //                    Forces the content rect into a specific on-screen
+    //                    SHAPE (e.g. 16:9) rather than just viewportSize's
+    //                    own aspect -- see Camera2D::targetAspect.
+    //   borderShader -- drawn as a single full-window quad BEFORE the GL
+    //                    viewport narrows down to the (possibly smaller,
+    //                    letterboxed) content rect, so it's what shows
+    //                    through in the margins. May be nullptr (no
+    //                    border draw, margins just show whatever glClear
+    //                    left behind -- matches the old behavior).
+    //
+    // The content rect is computed via a nested aspect-fit (see the
+    // FitAspect helper in the .cpp): fit targetAspect (or, if unset,
+    // viewportSize) into the real window preserving aspect (uniform
+    // scale, so it never stretches), then fit viewportSize into THAT
+    // rect the same way. Either step degenerates to "fill exactly" when
+    // the aspects already match, so this same call handles every case
+    // (no targetAspect, matching targetAspect, mismatched targetAspect)
+    // without a branch. Screen-space draws (DrawScreenQuad/
+    // DrawScreenTexturedQuad) are never affected by any of this -- that's
+    // the whole point of the split, see those methods.
+    void SetActiveCamera(const Vector2& position, const Vector2& viewportSize,
+                          const Vector2& targetAspect, Shader* borderShader);
 
     // Reverts world-space draws to the legacy identity mapping (world
-    // pixels == screen pixels, origin top-left) -- i.e. "no camera".
+    // pixels == screen pixels, full window, origin top-left) -- i.e. "no
+    // camera". Also drops the GL viewport back to the full window.
     void ClearActiveCamera();
 
     // Basic Quad Draw at Transform, can have applied shaders. World-space:
@@ -77,6 +101,17 @@ private:
 
     void SubmitQuad(Shader& active);
 
+    // Which region of the real window the GL viewport is currently set
+    // to. World-space draws need Content (the letterboxed camera rect, or
+    // the full window if no camera/no letterboxing); screen-space draws
+    // always need FullWindow. Tracked so repeated same-mode draws (the
+    // overwhelmingly common case -- a frame draws many quads in a row
+    // without switching) don't re-issue a redundant glViewport() call
+    // each time; same "avoid redundant GL state changes" spirit as
+    // Shader::Bind()'s s_CurrentProgram check.
+    enum class ViewportMode { FullWindow, Content };
+    void EnsureViewport(ViewportMode mode);
+
     unsigned int m_VBO = 0;
     std::unique_ptr<Shader> m_DefaultShader;
 
@@ -87,6 +122,17 @@ private:
     bool m_HasCamera = false;
     Vector2 m_CameraPos;
     Vector2 m_CameraViewport;
+
+    // The camera's on-screen content rect, in real window pixels
+    // (top-left origin -- see SetActiveCamera's .cpp for why no Y-flip is
+    // needed for glViewport despite GL's bottom-left convention: centered
+    // letterboxing makes the top-margin and bottom-margin equal, so the
+    // ambiguity is moot). Recomputed every SetActiveCamera() call; only
+    // meaningful while m_HasCamera is true.
+    float m_ContentX = 0.0f, m_ContentY = 0.0f;
+    float m_ContentW = 1.0f, m_ContentH = 1.0f;
+
+    ViewportMode m_ViewportMode = ViewportMode::FullWindow;
 
     bool m_Initialized = false;
 };

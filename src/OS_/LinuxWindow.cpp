@@ -200,7 +200,38 @@ void LinuxWindow::SetIcon(const std::string& filepath) {
     
     XFlush(m_Display);
     stbi_image_free(data);
-}// File: src/Renderer/Renderer2D.cpp -- add #include "Texture.h", then replace
-// DrawQuad's body with the factored version and add DrawTexturedQuad:
+}
+
+// Standard EWMH fullscreen toggle -- the same technique GLFW/SDL use.
+// We don't resize/reposition the window ourselves; we ask the window
+// manager to do it via a ClientMessage on the root window, per the EWMH
+// spec (_NET_WM_STATE with the "_NET_WM_STATE_ADD"/"_NET_WM_STATE_REMOVE"
+// convention: 1 to add the state, 0 to remove it). Requires an
+// EWMH-compliant WM to actually do anything -- under a bare Xvfb with no
+// window manager running, this is a harmless no-op (the ClientMessage is
+// sent but nothing is listening to act on it).
+void LinuxWindow::SetFullscreen(bool fullscreen) {
+    if (fullscreen == m_Fullscreen) return;
+
+    Atom wmState = XInternAtom(m_Display, "_NET_WM_STATE", False);
+    Atom wmFullscreen = XInternAtom(m_Display, "_NET_WM_STATE_FULLSCREEN", False);
+
+    XEvent xev = {};
+    xev.type = ClientMessage;
+    xev.xclient.window = m_Window;
+    xev.xclient.message_type = wmState;
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = fullscreen ? 1 : 0; // 1 = _NET_WM_STATE_ADD, 0 = _NET_WM_STATE_REMOVE
+    xev.xclient.data.l[1] = static_cast<long>(wmFullscreen);
+    xev.xclient.data.l[2] = 0;
+    xev.xclient.data.l[3] = 1; // source indication: 1 = normal application
+    xev.xclient.data.l[4] = 0;
+
+    Window root = DefaultRootWindow(m_Display);
+    XSendEvent(m_Display, root, False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+    XFlush(m_Display);
+
+    m_Fullscreen = fullscreen;
+}
 
 #endif

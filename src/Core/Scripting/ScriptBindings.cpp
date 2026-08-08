@@ -118,9 +118,9 @@ void RegisterVector2(lua_State* L) {
 // =====================================================================
 // RigidBody2D -- pointer type, owned by ActorRegistry. Most of its
 // surface is direct field access (Property/Vec2Property/PtrProperty) or
-// a plain method call; only position/rotation (nested inside `transform`,
-// rotation also unit-converted) and the optional-size constructor need a
-// hand-written trampoline.
+// a plain method call; only position/rotation/scale (nested inside
+// `transform`, rotation also unit-converted) and the optional-size
+// constructor need a hand-written trampoline.
 // =====================================================================
 
 int Lua_RigidBody2DNew(lua_State* L) {
@@ -162,6 +162,28 @@ int Lua_RigidBody2DSetRotation(lua_State* L) {
     return 0;
 }
 
+// Scale is a per-object visual multiplier on top of GetSize()/SetSize()'s
+// logical/collision size -- deliberately decoupled (see Renderer2D's
+// drawSize computation) so scaling a sprite up/down for a visual effect
+// never silently resizes its CollisionShape2D underneath it. sy defaults
+// to sx when omitted, so body:SetScale(2) means uniform 2x rather than
+// forcing every non-uniform-scale caller to repeat the same number twice.
+int Lua_RigidBody2DGetScale(lua_State* L) {
+    RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
+    lua_pushnumber(L, self->transform.scale.x);
+    lua_pushnumber(L, self->transform.scale.y);
+    return 2;
+}
+
+int Lua_RigidBody2DSetScale(lua_State* L) {
+    RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
+    float sx = static_cast<float>(luaL_checknumber(L, 2));
+    float sy = static_cast<float>(luaL_optnumber(L, 3, sx));
+    self->transform.scale.x = sx;
+    self->transform.scale.y = sy;
+    return 0;
+}
+
 int Lua_RigidBody2DSetColor(lua_State* L) {
     RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
     self->color.r = static_cast<float>(luaL_checknumber(L, 2));
@@ -199,6 +221,8 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .Raw("SetPosition", &Lua_RigidBody2DSetPosition)
         .Raw("GetRotation", &Lua_RigidBody2DGetRotation)
         .Raw("SetRotation", &Lua_RigidBody2DSetRotation)
+        .Raw("GetScale", &Lua_RigidBody2DGetScale)
+        .Raw("SetScale", &Lua_RigidBody2DSetScale)
         .Raw("SetColor", &Lua_RigidBody2DSetColor)
         .Raw("IsPlayer", &Lua_RigidBody2DIsPlayer)
         .Raw("GetSprite", &Lua_RigidBody2DGetSprite)
@@ -373,18 +397,19 @@ void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
 }
 
 // =====================================================================
-// Camera2D -- pointer type, owned by ActorRegistry. viewportSize is a
-// direct Vector2 field (Vec2Property, same hot-path "two raw numbers"
-// convention as RigidBody2D::velocity/size); followTarget is a direct
-// RigidBody2D* field (PtrProperty, nil-clears-it setter, same convention
-// as RigidBody2D::shader/collisionShape/playerConfig); followSmoothing/
-// active are plain scalar fields. Nothing here needs a hand-written
-// trampoline.
+// Camera2D -- pointer type, owned by ActorRegistry. viewportSize/
+// targetAspect are direct Vector2 fields (Vec2Property, same hot-path
+// "two raw numbers" convention as RigidBody2D::velocity/size);
+// followTarget is a direct RigidBody2D* field (PtrProperty, nil-clears-it
+// setter, same convention as RigidBody2D::shader/collisionShape/
+// playerConfig); followSmoothing/active are plain scalar fields. Nothing
+// here needs a hand-written trampoline.
 // =====================================================================
 
 void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Class<Camera2D>(L, LuaBinding::MetatableOf<Camera2D>::name)
         .Vec2Property<&Camera2D::viewportSize>("GetViewportSize", "SetViewportSize")
+        .Vec2Property<&Camera2D::targetAspect>("GetTargetAspect", "SetTargetAspect")
         .PtrProperty<&Camera2D::followTarget>("GetFollowTarget", "SetFollowTarget")
         .Property<&Camera2D::followSmoothing>("GetFollowSmoothing", "SetFollowSmoothing")
         .Property<&Camera2D::active>("IsActive", "SetActive")
@@ -428,9 +453,10 @@ void RegisterGraphics(lua_State* L, IGraphicsContext* graphics) {
 }
 
 // =====================================================================
-// Window -- eWindow global. GetWidth/GetHeight/SetIcon map straight onto
-// IWindow's (virtual) methods -- pointer-to-member-function dispatch is
-// virtual automatically, no special-casing needed for that.
+// Window -- eWindow global. GetWidth/GetHeight/SetIcon/SetFullscreen/
+// IsFullscreen map straight onto IWindow's (virtual) methods -- pointer-
+// to-member-function dispatch is virtual automatically, no special-
+// casing needed for that.
 // =====================================================================
 
 void RegisterWindow(lua_State* L, IWindow* window) {
@@ -438,6 +464,8 @@ void RegisterWindow(lua_State* L, IWindow* window) {
         .Method<&IWindow::GetWidth>("GetWidth")
         .Method<&IWindow::GetHeight>("GetHeight")
         .Method<&IWindow::SetIcon>("SetIcon")
+        .Method<&IWindow::SetFullscreen>("SetFullscreen")
+        .Method<&IWindow::IsFullscreen>("IsFullscreen")
         .Finish();
 
     LuaBinding::Value<IWindow*>::Push(L, window);
@@ -453,6 +481,20 @@ void RegisterWindow(lua_State* L, IWindow* window) {
 // bodies that never had an explicit shader set), so this bypasses
 // BindRawFunction/Table::RawWithContext -- both only support one
 // captured context pointer -- and pushes both closures by hand.
+//
+// SyncCamera() -- resolves ActorRegistry's currently-active camera (see
+// GetActiveCamera()) and pushes it into the renderer for the rest of this
+// frame's world-space draws (including its targetAspect, the "Border"
+// named shader, and any attached border sprite -- see SetBorderSprite --
+// so the letterbox/pillarbox margins get whatever border effect is
+// currently loaded), or clears it if no camera is active. Call once per
+// frame from Lua (after any camera-follow update, before your Draw()
+// calls) -- deliberately NOT done automatically inside DrawBody() itself:
+// that would re-resolve the active camera on every single object drawn
+// (an O(n) ActorRegistry scan per DrawBody call, O(n^2) per frame) for a
+// value that only actually needs recomputing once a frame. Same
+// two-upvalue hand-rolled closure as Lua_DrawBody, for the same reason
+// (needs both a Renderer2D* and an ActorRegistry*).
 // =====================================================================
 
 int Lua_DrawBody(lua_State* L) {
@@ -477,16 +519,6 @@ int Lua_DrawBody(lua_State* L) {
     return 0;
 }
 
-// SyncCamera() -- resolves ActorRegistry's currently-active camera (see
-// GetActiveCamera()) and pushes it into the renderer for the rest of this
-// frame's world-space draws, or clears it if no camera is active. Call
-// once per frame from Lua (after any camera-follow update, before your
-// Draw() calls) -- deliberately NOT done automatically inside DrawBody()
-// itself: that would re-resolve the active camera on every single object
-// drawn (an O(n) ActorRegistry scan per DrawBody call, O(n^2) per frame)
-// for a value that only actually needs recomputing once a frame. Same
-// two-upvalue hand-rolled closure as Lua_DrawBody above, for the same
-// reason (needs both a Renderer2D* and an ActorRegistry*).
 int Lua_SyncCamera(lua_State* L) {
     auto* renderer = static_cast<Renderer2D*>(lua_touserdata(L, lua_upvalueindex(1)));
     auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(2)));
@@ -494,7 +526,18 @@ int Lua_SyncCamera(lua_State* L) {
 
     RigidBody2D* camBody = actors->GetActiveCamera();
     if (camBody && camBody->camera) {
-        renderer->SetActiveCamera(camBody->transform.position, camBody->camera->viewportSize);
+        Shader* border = actors->GetOrCreateNamedShader("Border");
+
+        // Same "flush pending edits, then hand over the raw Texture*"
+        // shape Lua_DrawBody already uses for sprite-backed bodies above.
+        Texture* borderTexture = nullptr;
+        if (PixelSprite* borderSprite = actors->GetBorderSprite()) {
+            borderSprite->Flush();
+            borderTexture = borderSprite->GetTexture();
+        }
+
+        renderer->SetActiveCamera(camBody->transform.position, camBody->camera->viewportSize,
+                                   camBody->camera->targetAspect, border, borderTexture);
     } else {
         renderer->ClearActiveCamera();
     }
@@ -514,13 +557,19 @@ void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors)
 }
 
 // =====================================================================
-// Actors -- table of ActorRegistry-wide queries, both mechanical.
+// Actors -- table of ActorRegistry-wide queries and utilities.
+// GetNamedShader/LoadShaderFromFile/SetBorderSprite/GetBorderSprite are
+// all mechanical 1:1 method forwards; DumpTree too.
 // =====================================================================
 
 void RegisterActorRegistry(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L)
         .Function<&ActorRegistry::GetPlayerActor>("GetPlayer", actors)
         .Function<&ActorRegistry::GetActiveCamera>("GetActiveCamera", actors)
+        .Function<&ActorRegistry::GetOrCreateNamedShader>("GetNamedShader", actors)
+        .Function<&ActorRegistry::LoadNamedShaderFromFile>("LoadShaderFromFile", actors)
+        .Function<&ActorRegistry::SetBorderSprite>("SetBorderSprite", actors)
+        .Function<&ActorRegistry::GetBorderSprite>("GetBorderSprite", actors)
         .Function<&ActorRegistry::DumpTree>("Dump", actors)
         .Finish("Actors");
 }

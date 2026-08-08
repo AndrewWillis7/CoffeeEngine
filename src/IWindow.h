@@ -35,6 +35,16 @@ public:
     virtual void SetIcon(const std::string& filepath) = 0;
     virtual void SetEventCallback(std::function<void(const WindowEvent&)> callback) = 0;
 
+    // Toggles OS-level fullscreen (borderless, monitor-filling on Windows;
+    // EWMH _NET_WM_STATE_FULLSCREEN on Linux -- needs an EWMH-compliant
+    // window manager, so it's a silent no-op under a bare Xvfb/no-WM
+    // setup). Either path resizes the real window, which fires the usual
+    // WindowEvent::Type::Resize -> Renderer2D::SetViewportSize callback
+    // already wired in main.cpp -- no extra plumbing needed for the
+    // camera/letterbox system to pick up the new size.
+    virtual void SetFullscreen(bool fullscreen) = 0;
+    virtual bool IsFullscreen() const = 0;
+
     // Native OS Handles
     virtual void* GetNativeWindow() const = 0;
     virtual void* GetNativeDisplay() const = 0;

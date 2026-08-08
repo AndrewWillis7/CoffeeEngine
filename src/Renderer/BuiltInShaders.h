@@ -11,4 +11,5 @@ namespace BuiltInShaders {
     extern const char* RoundedPanelFragmentSrc;
     extern const char* TexturedFragmentSrc;
     extern const char* TextFragmentSrc;
+    extern const char* BorderFragmentSrc;
 } // End of Namespace BuiltInShaders

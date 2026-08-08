@@ -19,6 +19,9 @@ public:
     void SetIcon(const std::string& filepath) override;
     void SetEventCallback(std::function<void(const WindowEvent&)> callback) override { m_EventCallback = callback; }
 
+    void SetFullscreen(bool fullscreen) override;
+    bool IsFullscreen() const override { return m_Fullscreen; }
+
     void* GetNativeWindow() const override;
     void* GetNativeDisplay() const override;
 
@@ -29,6 +32,7 @@ private:
 
     int m_width, m_height;
     bool m_ShouldClose = false;
+    bool m_Fullscreen = false;
 
     std::function<void(const WindowEvent&)> m_EventCallback;
 };

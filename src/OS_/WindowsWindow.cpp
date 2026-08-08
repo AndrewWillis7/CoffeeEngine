@@ -225,4 +225,46 @@ void WindowsWindow::SetIcon(const std::string& filepath) {
     SendMessage(m_Hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
 }
 
+// Borderless-fullscreen toggle (WS_POPUP sized to the monitor), not true
+// exclusive fullscreen -- simpler, no display-mode switch, and plays
+// nicer with alt-tab/multi-monitor setups, same trade-off most modern
+// engines make by default. SetWindowPos's SWP_FRAMECHANGED synchronously
+// pumps a WM_SIZE through the message loop, which already fires
+// WindowEvent::Type::Resize via HandleMessage() above -- so, same as the
+// Linux EWMH path, the camera/letterbox system picks up the new size with
+// no extra plumbing. UNVERIFIED -- no Windows box to test against, same
+// caveat already on WM_MOUSEWHEEL elsewhere in this file.
+void WindowsWindow::SetFullscreen(bool fullscreen) {
+    if (fullscreen == m_Fullscreen) return;
+
+    if (fullscreen) {
+        m_WindowedStyle = GetWindowLong(m_Hwnd, GWL_STYLE);
+
+        RECT windowedRect;
+        GetWindowRect(m_Hwnd, &windowedRect);
+        m_WindowedX = windowedRect.left;
+        m_WindowedY = windowedRect.top;
+        m_WindowedW = windowedRect.right - windowedRect.left;
+        m_WindowedH = windowedRect.bottom - windowedRect.top;
+
+        HMONITOR monitor = MonitorFromWindow(m_Hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(MONITORINFO) };
+        GetMonitorInfo(monitor, &mi);
+
+        SetWindowLong(m_Hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(m_Hwnd, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_FRAMECHANGED);
+    } else {
+        SetWindowLong(m_Hwnd, GWL_STYLE, m_WindowedStyle);
+        SetWindowPos(m_Hwnd, HWND_TOP,
+            m_WindowedX, m_WindowedY, m_WindowedW, m_WindowedH,
+            SWP_FRAMECHANGED);
+    }
+
+    m_Fullscreen = fullscreen;
+}
+
 #endif

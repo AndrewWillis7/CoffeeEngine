@@ -9,6 +9,7 @@
 #include "Renderer/ShaderLibrary.h"
 #include "Renderer/PixelSprite.h"
 #include <sstream>
+#include <fstream>
 #include <iostream>
 
 ActorRegistry::ActorRegistry() {
@@ -18,6 +19,22 @@ ActorRegistry::ActorRegistry() {
     ShaderLibrary::Register("RoundedPanel", BuiltInShaders::RoundedPanelFragmentSrc);
     ShaderLibrary::Register("Textured", BuiltInShaders::TexturedFragmentSrc);
     ShaderLibrary::Register("Text", BuiltInShaders::TextFragmentSrc);
+    ShaderLibrary::Register("Border", BuiltInShaders::BorderFragmentSrc);
+
+    // "Border" (see Renderer2D::SetActiveCamera) gets sensible defaults up
+    // front, same spirit as CreateGlowShader() setting per-instance
+    // defaults right after construction -- so a script that never touches
+    // it still gets a good-looking letterbox instead of flat black
+    // (every uniform GLSL doesn't explicitly set defaults to zero, and
+    // zeroed u_BorderColorA/B would just be solid black). Still fully
+    // Lua-tunable afterward via Actors.GetNamedShader("Border"):SetVec3(...).
+    Shader* border = GetOrCreateNamedShader("Border");
+    if (border && border->IsValid()) {
+        border->SetVec3("u_BorderColorA", 0.05f, 0.05f, 0.12f);
+        border->SetVec3("u_BorderColorB", 0.35f, 0.10f, 0.45f);
+        border->SetFloat("u_BorderSpeed", 1.5f);
+        border->SetFloat("u_BorderWaveScale", 6.0f);
+    }
 }
 
 ActorRegistry::~ActorRegistry() = default;
@@ -64,6 +81,38 @@ Shader* ActorRegistry::GetOrCreateNamedShader(const std::string& name) {
     Shader* raw = shader.get();
     m_NamedShaders[name] = std::move(shader);
     return raw;
+}
+
+bool ActorRegistry::LoadNamedShaderFromFile(const std::string& name, const std::string& fragmentPath) {
+    std::ifstream file(fragmentPath);
+    if (!file) {
+        std::cerr << "Engine Warning: couldn't open '" << fragmentPath << "' for shader '" << name << "'\n";
+        return false;
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string fragmentSrc = buffer.str();
+
+    auto shader = std::make_unique<Shader>(BuiltInShaders::QuadVertexSrc, fragmentSrc);
+    if (!shader->IsValid()) {
+        // Shader's own constructor already printed the GLSL compile/link
+        // error -- add just enough context here to say WHICH named slot
+        // and WHICH file it came from, then bail without touching
+        // whatever was already cached under `name` (still fully usable).
+        std::cerr << "Engine Warning: shader '" << name << "' from '" << fragmentPath
+                   << "' failed to compile -- keeping the previous shader (if any).\n";
+        return false;
+    }
+
+    // Keep ShaderLibrary's registry in sync too, so any future
+    // GetOrCreateNamedShader("Border")-style lookup that DOESN'T already
+    // have a cached instance (a fresh ActorRegistry, hypothetically) also
+    // sees this source rather than only whatever built-in was registered
+    // at startup.
+    ShaderLibrary::Register(name, fragmentSrc);
+
+    m_NamedShaders[name] = std::move(shader);
+    return true;
 }
 
 CollisionShape2D* ActorRegistry::CreateBoxCollisionShape(float halfWidth, float halfHeight, float offsetX, float offsetY) {

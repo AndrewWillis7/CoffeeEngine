@@ -27,6 +27,23 @@ public:
     // updating it on resize) is on the caller for now.
     Vector2 viewportSize = Vector2(320.0f, 180.0f);
 
+    // Optional second aspect-ratio constraint, independent of viewportSize.
+    // Zero (default, either component) means "not set" -- the camera's
+    // content is fit directly against the real window using viewportSize's
+    // own aspect, one level of letterbox/pillarbox sized to whatever the
+    // window/monitor happens to be shaped like.
+    //
+    // Set both components (e.g. SetTargetAspect(16, 9)) to force the
+    // camera's output to live inside a region of that SHAPE instead,
+    // regardless of viewportSize's own aspect -- e.g. a 1:1 50x50
+    // viewportSize with a 16:9 targetAspect renders as a square, pillar-
+    // boxed inside a 16:9 rectangle, which is itself letterboxed/
+    // pillarboxed against the real window if the window's own aspect
+    // doesn't match 16:9 either. Renderer2D does this as a single nested
+    // fit (see its FitAspect helper) -- never a non-uniform stretch on
+    // either level.
+    Vector2 targetAspect = Vector2::Zero();
+
     // Non-owning. Set via Lua's camera:SetFollowTarget(body) (nil to stop
     // following). Same lifetime convention as every other cross-reference
     // in this engine (RigidBody2D::shader, etc.) -- owned and kept alive

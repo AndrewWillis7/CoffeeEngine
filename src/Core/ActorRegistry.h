@@ -26,6 +26,20 @@ public:
     Shader* CreateGlowShader();
     Shader* GetOrCreateNamedShader(const std::string& name);
 
+    // Reads a .frag file off disk (paired with the engine's shared
+    // QuadVertexSrc, same as every other named shader) and installs it
+    // under `name`, REPLACING whatever's currently cached there -- unlike
+    // GetOrCreateNamedShader, which only creates on first use and then
+    // keeps serving that same instance forever. This is how Lua swaps out
+    // e.g. the "Border" shader for a custom one at runtime: Actors.
+    // LoadShaderFromFile("Border", "scripts/shaders/my_border.frag").
+    // Also re-registers the source in ShaderLibrary so it's consistent
+    // for any other lookup path. If the file is missing or fails to
+    // compile, logs a warning and leaves whatever was previously cached
+    // (if anything) untouched -- a typo in a live-tunable shader path
+    // shouldn't take down rendering. Returns true on success.
+    bool LoadNamedShaderFromFile(const std::string& name, const std::string& fragmentPath);
+
     // Loads (or returns the already-loaded) PixelSprite for a given PNG
     // path, keyed by that path string -- same "load once, cache by key"
     // shape as GetOrCreateNamedShader. Returns nullptr if the PNG failed
@@ -39,6 +53,17 @@ public:
     size_t GetBodyCount() const {return m_Bodies.size();}
 
     Camera2D* CreateCamera();
+
+    // Non-owning, same lifetime convention as every other cross-reference
+    // here -- the PixelSprite itself is owned by whichever GetOrLoadPixelSprite
+    // call created it. Renderer2D::SetActiveCamera (via SyncCamera(), see
+    // ScriptBindings.cpp) draws this behind the letterbox/pillarbox
+    // margins if the active "Border" shader wants a texture (declares
+    // `uniform sampler2D u_Texture`) -- nullptr (the default) just means
+    // the border shader runs with no texture bound, which is exactly what
+    // the built-in procedural sin-wave border wants.
+    void SetBorderSprite(PixelSprite* sprite) { m_BorderSprite = sprite; }
+    PixelSprite* GetBorderSprite() const { return m_BorderSprite; }
 
     // Scans all bodies for one with a PlayerActorConfig attached. Returns
     // nullptr if no body has been marked as the player yet. O(n) over
@@ -74,4 +99,10 @@ private:
     // instances, so a script hot-reload shouldn't force every destructible
     // sprite to reload (and lose whatever's already been punched out of it).
     std::unordered_map<std::string, std::unique_ptr<PixelSprite>> m_PixelSprites;
+
+    // Non-owning -- see SetBorderSprite() above. Deliberately NOT cleared
+    // by Clear(): a hot-reload's fresh Init() will just set it again if
+    // the script wants a border sprite, same reasoning as m_NamedShaders/
+    // m_PixelSprites already not resetting on reload.
+    PixelSprite* m_BorderSprite = nullptr;
 };

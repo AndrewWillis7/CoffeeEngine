@@ -39,6 +39,9 @@ public:
 
     void SetIcon(const std::string& filepath) override;
 
+    void SetFullscreen(bool fullscreen) override;
+    bool IsFullscreen() const override { return m_Fullscreen; }
+
     void SetEventCallback(
         std::function<void(const WindowEvent&)> callback) override
     {
@@ -68,6 +71,17 @@ private:
     int m_Height;
 
     bool m_ShouldClose = false;
+
+    // Fullscreen state -- plain ints/long instead of RECT/LONG so this
+    // header doesn't need <windows.h> (same forward-declaration
+    // discipline as m_Hwnd/m_Instance above). SetFullscreen() saves the
+    // windowed placement here before going fullscreen, so turning
+    // fullscreen back off restores the exact previous size/position
+    // instead of guessing. UNVERIFIED -- no Windows box to test against,
+    // same caveat as WM_MOUSEWHEEL below.
+    bool m_Fullscreen = false;
+    long m_WindowedStyle = 0;
+    int m_WindowedX = 0, m_WindowedY = 0, m_WindowedW = 0, m_WindowedH = 0;
 
     std::function<void(const WindowEvent&)> m_EventCallback;
 };

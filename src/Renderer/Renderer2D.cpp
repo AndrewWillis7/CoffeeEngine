@@ -4,6 +4,7 @@
 #include "Texture.h"
 #include "BuiltInShaders.h"
 #include <GL/gl.h>
+#include <algorithm>
 #include <iostream>
 
 namespace {
@@ -15,6 +16,22 @@ constexpr float kQuadVertices[] = {
      0.5f,  0.5f,
     -0.5f,  0.5f,
 };
+
+// Largest rect of aspect targetW:targetH that fits inside a
+// containerW x containerH box, centered, via a single uniform scale
+// factor -- the "never stretch" guarantee: both axes always scale by
+// exactly the same amount, the smaller of the two possible fits.
+struct FitRect { float x, y, w, h; };
+
+FitRect FitAspect(float containerW, float containerH, float targetW, float targetH) {
+    if (targetW <= 0.0f) targetW = 1.0f;
+    if (targetH <= 0.0f) targetH = 1.0f;
+
+    float scale = std::min(containerW / targetW, containerH / targetH);
+    float w = targetW * scale;
+    float h = targetH * scale;
+    return FitRect{ (containerW - w) * 0.5f, (containerH - h) * 0.5f, w, h };
+}
 } // End Of Namespace
 
 Renderer2D::Renderer2D() = default;
@@ -60,14 +77,34 @@ void Renderer2D::Shutdown() {
 void Renderer2D::SetViewportSize(int width, int height) {
     m_Width = width > 0 ? static_cast<float>(width) : 1.0f;
     m_Height = height > 0 ? static_cast<float>(height) : 1.0f;
+
+    // Force a fresh glViewport(0,0,w,h) unconditionally, even if we happen
+    // to already be tracked as FullWindow -- the window itself just
+    // changed size, so the last actual glViewport call (whatever mode it
+    // was in) is stale regardless of what our cached mode says.
     glViewport(0, 0, width, height);
+    m_ViewportMode = ViewportMode::FullWindow;
 }
 
 void Renderer2D::BeginFrame(float deltaTime) {
     m_Time += deltaTime;
 }
 
-void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewportSize) {
+void Renderer2D::EnsureViewport(ViewportMode mode) {
+    if (m_ViewportMode == mode) return;
+    m_ViewportMode = mode;
+
+    if (mode == ViewportMode::FullWindow) {
+        glViewport(0, 0, static_cast<GLint>(m_Width), static_cast<GLint>(m_Height));
+    } else {
+        glViewport(static_cast<GLint>(m_ContentX), static_cast<GLint>(m_ContentY),
+                   static_cast<GLsizei>(m_ContentW), static_cast<GLsizei>(m_ContentH));
+    }
+}
+
+void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewportSize,
+                                  const Vector2& targetAspect, Shader* borderShader,
+                                  Texture* borderTexture) {
     m_HasCamera = true;
     m_CameraPos = position;
     // Guard against a zero/negative viewport (e.g. a Camera2D whose
@@ -78,10 +115,42 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
     m_CameraViewport = Vector2(
         viewportSize.x > 0.0f ? viewportSize.x : 1.0f,
         viewportSize.y > 0.0f ? viewportSize.y : 1.0f);
+
+    // Nested aspect-fit: first fit targetAspect (or, if unset, the
+    // camera's own viewportSize) into the real window; then fit
+    // viewportSize into THAT rect. When targetAspect is unset the two
+    // steps use the same aspect, so the second fit just fills the first
+    // rect exactly -- one clean formula covers both the "just fit to
+    // window" and "fit inside a specific on-screen shape" cases.
+    bool hasTargetAspect = targetAspect.x > 0.0f && targetAspect.y > 0.0f;
+    Vector2 aspectBasis = hasTargetAspect ? targetAspect : m_CameraViewport;
+
+    FitRect outer = FitAspect(m_Width, m_Height, aspectBasis.x, aspectBasis.y);
+    FitRect inner = FitAspect(outer.w, outer.h, m_CameraViewport.x, m_CameraViewport.y);
+
+    m_ContentX = outer.x + inner.x;
+    m_ContentY = outer.y + inner.y;
+    m_ContentW = inner.w;
+    m_ContentH = inner.h;
+
+    // Paint the border into whatever margin space the fit above leaves
+    // behind -- must happen on the FULL window viewport, before we shrink
+    // down to the content rect below, or it'd just paint over itself.
+    if (borderShader && borderShader->IsValid()) {
+        if (borderTexture && borderTexture->IsValid()) {
+            DrawScreenTexturedQuad({{m_Width * 0.5f, m_Height * 0.5f}, 0.0f}, {m_Width, m_Height},
+                                    Color::White(), borderShader, borderTexture);
+        } else {
+            DrawScreenQuad({{m_Width * 0.5f, m_Height * 0.5f}, 0.0f}, {m_Width, m_Height}, Color::White(), borderShader);
+        }
+    }
+
+    EnsureViewport(ViewportMode::Content);
 }
 
 void Renderer2D::ClearActiveCamera() {
     m_HasCamera = false;
+    EnsureViewport(ViewportMode::FullWindow);
 }
 
 void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transform, const Vector2& size,
@@ -129,10 +198,17 @@ void Renderer2D::SubmitQuad(Shader& active) {
 void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader) {
     if (!m_Initialized) return;
 
+    EnsureViewport(m_HasCamera ? ViewportMode::Content : ViewportMode::FullWindow);
+
     Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
     if (!active || !active->IsValid()) return;
 
-    Vector2 drawSize = size * active->overdrawScale;
+    // transform.scale is a per-object multiplier on top of `size` (and the
+    // shader's own overdrawScale) -- e.g. Vector2(2,2) draws twice as big
+    // without touching the object's logical/collision size. Defaults to
+    // Vector2::One() (see Transform2D.h), so this is a no-op for every
+    // existing caller that's never touched .scale.
+    Vector2 drawSize = size * active->overdrawScale * transform.scale;
 
     active->Bind();
     ApplyCommonUniforms(*active, transform, drawSize, color, /*world=*/true);
@@ -145,7 +221,9 @@ void Renderer2D::DrawTexturedQuad(const Transform2D& transform, const Vector2& s
     if (!m_Initialized || !texture || !texture->IsValid()) return;
     if (!shader || !shader->IsValid()) return;
 
-    Vector2 drawSize = size * shader->overdrawScale;
+    EnsureViewport(m_HasCamera ? ViewportMode::Content : ViewportMode::FullWindow);
+
+    Vector2 drawSize = size * shader->overdrawScale * transform.scale;
 
     texture->Bind();
     shader->Bind();
@@ -160,10 +238,12 @@ void Renderer2D::DrawTexturedQuad(const Transform2D& transform, const Vector2& s
 void Renderer2D::DrawScreenQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader) {
     if (!m_Initialized) return;
 
+    EnsureViewport(ViewportMode::FullWindow);
+
     Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
     if (!active || !active->IsValid()) return;
 
-    Vector2 drawSize = size * active->overdrawScale;
+    Vector2 drawSize = size * active->overdrawScale * transform.scale;
 
     active->Bind();
     ApplyCommonUniforms(*active, transform, drawSize, color, /*world=*/false);
@@ -176,7 +256,9 @@ void Renderer2D::DrawScreenTexturedQuad(const Transform2D& transform, const Vect
     if (!m_Initialized || !texture || !texture->IsValid()) return;
     if (!shader || !shader->IsValid()) return;
 
-    Vector2 drawSize = size * shader->overdrawScale;
+    EnsureViewport(ViewportMode::FullWindow);
+
+    Vector2 drawSize = size * shader->overdrawScale * transform.scale;
 
     texture->Bind();
     shader->Bind();
