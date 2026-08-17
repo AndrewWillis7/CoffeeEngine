@@ -30,7 +30,7 @@ function Init()
     -- Press F11 to toggle real OS fullscreen -- stays correctly
     -- letterboxed at any window size, never stretches.
     local playerX, playerY = player.body:GetPosition()
-    camera = Camera.new(playerX, playerY, 50, 50)
+    camera = Camera.new(playerX, playerY, 256, 256)
     camera:Follow(player.body, 4.0)
     camera.camera:SetTargetAspect(16, 9)
     

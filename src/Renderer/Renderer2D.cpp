@@ -2,7 +2,7 @@
 #include "GLLoader.h"
 #include "Shader.h"
 #include "Texture.h"
-#include "BuiltInShaders.h"
+#include "ShaderLibrary.h"
 #include <GL/gl.h>
 #include <algorithm>
 #include <iostream>
@@ -52,9 +52,18 @@ void Renderer2D::Init() {
     GL::BufferData(GL_ARRAY_BUFFER, sizeof(kQuadVertices), kQuadVertices, GL_STATIC_DRAW);
     GL::BindBuffer(GL_ARRAY_BUFFER, 0);
 
-    m_DefaultShader = std::make_unique<Shader>(BuiltInShaders::QuadVertexSrc, BuiltInShaders::FlatFragmentSrc);
+    // The default shader used whenever a Draw call passes a null/invalid
+    // Shader* -- source lives at scripts/shaders/flat.frag, paired with
+    // the shared vertex stage every other shader in the engine uses too
+    // (see ShaderLibrary::SharedVertexSrc()).
+    std::string flatFragmentSrc;
+    if (!ShaderLibrary::ReadFile("scripts/shaders/flat.frag", flatFragmentSrc)) {
+        std::cerr << "Engine Fatal: Renderer2D couldn't open 'scripts/shaders/flat.frag'.\n";
+        return;
+    }
+    m_DefaultShader = std::make_unique<Shader>(ShaderLibrary::SharedVertexSrc(), flatFragmentSrc);
     if (!m_DefaultShader->IsValid()) {
-        std::cerr << "Engine Fatal: Renderer2D's built-in flat shader failed to build.\n";
+        std::cerr << "Engine Fatal: Renderer2D's default flat shader failed to build.\n";
         return;
     }
 

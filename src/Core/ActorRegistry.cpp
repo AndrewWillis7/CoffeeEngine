@@ -5,21 +5,20 @@
 #include "Gameplay/Camera2D.h"
 #include "Math/Transform2D.h"
 #include "Renderer/Shader.h"
-#include "Renderer/BuiltInShaders.h"
 #include "Renderer/ShaderLibrary.h"
 #include "Renderer/PixelSprite.h"
 #include <sstream>
-#include <fstream>
 #include <iostream>
 
 ActorRegistry::ActorRegistry() {
-    // Register the engine's built-in named effects once. Add a new one by
-    // writing the GLSL and adding one Register() line here.
-    ShaderLibrary::Register("Glow", BuiltInShaders::GlowFragmentSrc);
-    ShaderLibrary::Register("RoundedPanel", BuiltInShaders::RoundedPanelFragmentSrc);
-    ShaderLibrary::Register("Textured", BuiltInShaders::TexturedFragmentSrc);
-    ShaderLibrary::Register("Text", BuiltInShaders::TextFragmentSrc);
-    ShaderLibrary::Register("Border", BuiltInShaders::BorderFragmentSrc);
+    // Register the engine's built-in named effects once, straight off
+    // disk. Add a new one by writing the GLSL under scripts/shaders/
+    // and adding one RegisterFromFile() line here.
+    ShaderLibrary::RegisterFromFile("Glow", "scripts/shaders/glow.frag");
+    ShaderLibrary::RegisterFromFile("RoundedPanel", "scripts/shaders/rounded_panel.frag");
+    ShaderLibrary::RegisterFromFile("Textured", "scripts/shaders/textured.frag");
+    ShaderLibrary::RegisterFromFile("Text", "scripts/shaders/text.frag");
+    ShaderLibrary::RegisterFromFile("Border", "scripts/shaders/border.frag");
 
     // "Border" (see Renderer2D::SetActiveCamera) gets sensible defaults up
     // front, same spirit as CreateGlowShader() setting per-instance
@@ -56,11 +55,23 @@ Shader* ActorRegistry::CreateShader(const std::string& vertexSrc, const std::str
 }
 
 Shader* ActorRegistry::CreateGlowShader() {
-    Shader* shader = CreateShader(BuiltInShaders::QuadVertexSrc, BuiltInShaders::GlowFragmentSrc);
+    // Reuses whatever's already cached under the "Glow" named shader
+    // (registered from scripts/shaders/glow.frag in the constructor
+    // above) rather than reading the file a second time -- this just
+    // wants a SEPARATE Shader instance (its own uniform state) built
+    // from the same source, not the same cached instance.
+    const ShaderLibrary::Entry* entry = ShaderLibrary::Find("Glow");
+    Shader* shader = entry
+        ? CreateShader(entry->vertexSrc, entry->fragmentSrc)
+        : CreateShader(ShaderLibrary::SharedVertexSrc(), "");
+
     if (shader->IsValid()) {
         shader->overdrawScale = 1.8f;
         shader->SetVec3("u_GlowColor", 1.0f, 1.0f, 1.0f);
         shader->SetFloat("u_GlowIntensity", 1.2f);
+    } else if (!entry) {
+        std::cerr << "Engine Warning: CreateGlowShader() couldn't find the 'Glow' shader "
+                     "(scripts/shaders/glow.frag failed to load earlier) -- returning an invalid shader.\n";
     }
     return shader;
 }
@@ -84,16 +95,13 @@ Shader* ActorRegistry::GetOrCreateNamedShader(const std::string& name) {
 }
 
 bool ActorRegistry::LoadNamedShaderFromFile(const std::string& name, const std::string& fragmentPath) {
-    std::ifstream file(fragmentPath);
-    if (!file) {
+    std::string fragmentSrc;
+    if (!ShaderLibrary::ReadFile(fragmentPath, fragmentSrc)) {
         std::cerr << "Engine Warning: couldn't open '" << fragmentPath << "' for shader '" << name << "'\n";
         return false;
     }
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string fragmentSrc = buffer.str();
 
-    auto shader = std::make_unique<Shader>(BuiltInShaders::QuadVertexSrc, fragmentSrc);
+    auto shader = std::make_unique<Shader>(ShaderLibrary::SharedVertexSrc(), fragmentSrc);
     if (!shader->IsValid()) {
         // Shader's own constructor already printed the GLSL compile/link
         // error -- add just enough context here to say WHICH named slot

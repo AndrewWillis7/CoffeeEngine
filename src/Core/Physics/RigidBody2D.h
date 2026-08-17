@@ -107,8 +107,15 @@ public:
 
     // True if both bodies have a collisionShape attached and those shapes
     // currently overlap in world space. Returns false (not an error) if
-    // either body has no shape set yet.
+    // either body has no shape set yet. Also false if `other` IS this
+    // body (same address) -- a shape can never meaningfully overlap
+    // itself, and without this guard a caller that (accidentally or not)
+    // includes a body in its own "solids to check against" list -- e.g.
+    // Lua building one shared `solids` table and passing it to every
+    // mover's own Update(), including itself -- would get a spurious
+    // "yes, overlapping" back every single frame.
     bool CollidesWith(const RigidBody2D& other) const {
+        if (this == &other) return false;
         if (!collisionShape || !other.collisionShape) return false;
         return CollisionShape2D::Intersects(*collisionShape, transform, *other.collisionShape, other.transform);
     }
@@ -122,8 +129,18 @@ public:
     // Integrate() already uses for "never accelerates" -- so give a wall
     // mass = 0 and it won't budge, while a mass > 0 body gets shoved.
     // Returns true if the bodies were actually overlapping (whether or not
-    // either one was free to move).
+    // either one was free to move). Same self-collision guard as
+    // CollidesWith() above, and for the same reason -- without it, a body
+    // resolving against itself computes a nonzero "correction" (its own
+    // AABB always fully overlaps itself), and because `other` here IS
+    // `this`, the position correction below cancels out to a no-op by
+    // sheer aliasing coincidence -- but the velocity.x/y zeroing a few
+    // lines down does NOT cancel, so the body's velocity on one axis gets
+    // silently reset to zero every frame it's included in its own solids
+    // list (e.g. gravity never actually accumulates -- it just creeps at
+    // a constant per-frame increment instead of accelerating).
     bool ResolveCollisionWith(RigidBody2D& other) {
+        if (this == &other) return false;
         if (!collisionShape || !other.collisionShape) return false;
 
         Vector2 correction;

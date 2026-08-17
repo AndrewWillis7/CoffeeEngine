@@ -48,6 +48,11 @@ public:
     //                    through in the margins. May be nullptr (no
     //                    border draw, margins just show whatever glClear
     //                    left behind -- matches the old behavior).
+    //   borderTexture -- optional. When set (and borderShader is valid),
+    //                    the border is drawn via DrawScreenTexturedQuad
+    //                    instead of DrawScreenQuad, so a PixelSprite can
+    //                    back the border (see ActorRegistry::SetBorderSprite).
+    //                    May be nullptr (flat-color/procedural border only).
     //
     // The content rect is computed via a nested aspect-fit (see the
     // FitAspect helper in the .cpp): fit targetAspect (or, if unset,
@@ -60,7 +65,8 @@ public:
     // DrawScreenTexturedQuad) are never affected by any of this -- that's
     // the whole point of the split, see those methods.
     void SetActiveCamera(const Vector2& position, const Vector2& viewportSize,
-                          const Vector2& targetAspect, Shader* borderShader);
+                          const Vector2& targetAspect, Shader* borderShader,
+                          Texture* borderTexture = nullptr);
 
     // Reverts world-space draws to the legacy identity mapping (world
     // pixels == screen pixels, full window, origin top-left) -- i.e. "no

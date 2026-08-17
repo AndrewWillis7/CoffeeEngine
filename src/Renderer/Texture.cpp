@@ -6,7 +6,6 @@
 Texture::Texture(const std::string& filepath, Filter filter) {
     int channels = 0;
     // NOT flipped, unlike the usual OpenGL-tutorial advice: this engine's
-    // vertex shader (BuiltInShaders::QuadVertexSrc) uses a top-left-origin,
     // +y-down screen convention, and working through its actual uv math
     // (uv = v_LocalPos + 0.5) shows uv.y=0 already lands at the TOP of the
     // drawn quad -- which is exactly where stb_image's un-flipped row 0
