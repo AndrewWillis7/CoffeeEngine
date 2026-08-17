@@ -398,8 +398,8 @@ void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
 
 // =====================================================================
 // Camera2D -- pointer type, owned by ActorRegistry. viewportSize/
-// targetAspect are direct Vector2 fields (Vec2Property, same hot-path
-// "two raw numbers" convention as RigidBody2D::velocity/size);
+// targetAspect/focusOffset are direct Vector2 fields (Vec2Property, same
+// hot-path "two raw numbers" convention as RigidBody2D::velocity/size);
 // followTarget is a direct RigidBody2D* field (PtrProperty, nil-clears-it
 // setter, same convention as RigidBody2D::shader/collisionShape/
 // playerConfig); followSmoothing/active are plain scalar fields. Nothing
@@ -410,6 +410,7 @@ void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Class<Camera2D>(L, LuaBinding::MetatableOf<Camera2D>::name)
         .Vec2Property<&Camera2D::viewportSize>("GetViewportSize", "SetViewportSize")
         .Vec2Property<&Camera2D::targetAspect>("GetTargetAspect", "SetTargetAspect")
+        .Vec2Property<&Camera2D::focusOffset>("GetFocusOffset", "SetFocusOffset")
         .PtrProperty<&Camera2D::followTarget>("GetFollowTarget", "SetFollowTarget")
         .Property<&Camera2D::followSmoothing>("GetFollowSmoothing", "SetFollowSmoothing")
         .Property<&Camera2D::active>("IsActive", "SetActive")

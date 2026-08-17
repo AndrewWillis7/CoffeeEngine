@@ -3,6 +3,7 @@ local StaticBody = require("objects.static_body")
 local Prop = require("objects.prop")
 local Camera = require("objects.camera")
 local ArtObject = require("objects.art_object")
+local Constants = require("core.constants")
 
 function Init()
     print("Engine Initialized")
@@ -22,28 +23,36 @@ function Init()
 
     solids = {floor.body, wall.body, crate.body}
 
-    -- 50x50 is deliberately tiny -- a pixel-perfect "resolution control"
-    -- extreme. targetAspect(16,9) forces that square resolution to render
-    -- inside a 16:9-shaped region instead of just filling the window
-    -- directly, letterboxed against the real 800x600 (4:3) window.
+    -- Native pixel-art resolution + aspect, see core.constants -- the
+    -- "resolution control" knob; every world pixel draws
+    -- (real window width / RESOLUTION_WIDTH) real screen pixels wide,
+    -- letterboxed/pillarboxed to stay exactly 16:9 regardless of the
+    -- real window's own aspect.
     --
     -- Press F11 to toggle real OS fullscreen -- stays correctly
     -- letterboxed at any window size, never stretches.
     local playerX, playerY = player.body:GetPosition()
-    camera = Camera.new(playerX, playerY, 256, 256)
+    camera = Camera.new(playerX, playerY, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
     camera:Follow(player.body, 4.0)
-    camera.camera:SetTargetAspect(16, 9)
-    
+    camera.camera:SetTargetAspect(Constants.ASPECT_WIDTH, Constants.ASPECT_HEIGHT)
+
+    -- Frame the camera a bit ABOVE the player instead of dead-centered
+    -- on them -- more headroom to see what's coming (platforms, enemies,
+    -- the crate above), less wasted space below. Negative Y is up (see
+    -- Vector2.h's "+y is down" convention). ~11% of the native vertical
+    -- resolution reads as a gentle, not-too-aggressive offset.
+    camera.camera:SetFocusOffset(0, -40)
 
     -- The border (drawn behind everything, filling whatever the fit
-    -- above doesn't cover) defaults to a built-in animated sin-wave --
-    -- nothing to do if that's all you want. To swap it for something
+    -- above doesn't cover) defaults to a black night sky with sparse
+    -- stars up top and dark grey smoke clouds drifting near the bottom
+    -- -- nothing to do if that's all you want. To swap it for something
     -- else, write a .frag file (paired with the engine's shared vertex
     -- shader -- see scripts/shaders/*.frag for the uniform/varying
     -- interface each one has to work with) and load it by name:
     --
     --   Actors.LoadShaderFromFile("Border", "scripts/shaders/border_plain.frag")
-    --   Actors.GetNamedShader("Border"):SetVec3("u_MyColor", 0.6, 0.05, 0.05)
+    --   Actors.GetNamedShader("Border"):SetVec3("u_PlainColor", 0.6, 0.05, 0.05)
     --
     -- For a textured border (tiled pixel art, a photo, whatever), attach
     -- a sprite too -- SetBorderSprite works alongside any shader that

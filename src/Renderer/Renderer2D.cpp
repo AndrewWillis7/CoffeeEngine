@@ -146,6 +146,17 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
     // behind -- must happen on the FULL window viewport, before we shrink
     // down to the content rect below, or it'd just paint over itself.
     if (borderShader && borderShader->IsValid()) {
+        // How many real screen pixels currently correspond to one
+        // native/virtual pixel -- lets a procedural border shader (see
+        // border.frag) quantize itself onto the SAME pixel grid the rest
+        // of the game's pixel art renders at, regardless of the real
+        // window's size. inner.w/m_CameraViewport.x and
+        // inner.h/m_CameraViewport.y are equal (FitAspect only ever
+        // applies a single uniform scale, never a non-uniform stretch),
+        // so either axis works here; x is used for a single scalar.
+        float pixelScale = m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f;
+        borderShader->SetFloat("u_PixelScale", pixelScale);
+
         if (borderTexture && borderTexture->IsValid()) {
             DrawScreenTexturedQuad({{m_Width * 0.5f, m_Height * 0.5f}, 0.0f}, {m_Width, m_Height},
                                     Color::White(), borderShader, borderTexture);
@@ -184,6 +195,21 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
     shader.SetVec4("u_Color", color.r, color.g, color.b, color.a);
     shader.SetVec2("u_CameraPos", cameraPos.x, cameraPos.y);
     shader.SetVec2("u_ViewportSize", viewport.x, viewport.y);
+
+    // On-grid pixel snapping: world-space game-object draws (DrawQuad/
+    // DrawTexturedQuad) snap their center to the nearest whole native
+    // pixel so the pixel art stays crisp as the camera smoothly follows
+    // the player (Camera2D::Follow's exponential lerp lands on a
+    // fractional position most frames) -- without this, sprites
+    // shimmer/blur by fractions of a pixel as the camera eases toward
+    // its target. Screen-space draws (DrawScreenQuad/
+    // DrawScreenTexturedQuad -- the debug UI panel AND the full-window
+    // border background) deliberately do NOT snap here: UI shouldn't be
+    // forced onto the game's pixel grid, and the border achieves its own
+    // on-grid look through a different mechanism entirely (see
+    // border.frag's u_PixelScale), since it's one static full-window
+    // quad, not a moving sprite.
+    shader.SetFloat("u_PixelSnap", world ? 1.0f : 0.0f);
 }
 
 void Renderer2D::SubmitQuad(Shader& active) {

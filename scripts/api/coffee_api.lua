@@ -9,6 +9,54 @@
 -- checklist of what to update here.
 
 -- =====================================================================
+-- Graphics -- bare globals bound to IGraphicsContext* (RegisterGraphics)
+-- =====================================================================
+
+---@param r number Red channel, 0.0 - 1.0
+---@param g number Green channel, 0.0 - 1.0
+---@param b number Blue channel, 0.0 - 1.0
+function SetClearColor(r, g, b) end
+
+--- Legacy immediate-mode debug quad path (predates the shader-based
+--- Renderer2D/DrawBody pipeline). Still present but not the normal way to
+--- draw something -- prefer RigidBody2D + DrawBody for anything gameplay.
+---@param x number
+---@param y number
+---@param width number
+---@param height number
+---@param rotationDegrees number|nil
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function DrawDebugQuad(x, y, width, height, rotationDegrees, r, g, b, a) end
+
+-- =====================================================================
+-- Window -- eWindow global (RegisterWindow)
+-- =====================================================================
+---@class EngineWindow
+local EngineWindow = {}
+
+---@return integer
+function EngineWindow:GetWidth() end
+---@return integer
+function EngineWindow:GetHeight() end
+---@param filepath string PNG path
+function EngineWindow:SetIcon(filepath) end
+
+--- Standard EWMH fullscreen toggle on Linux (borderless-fullscreen on
+--- Windows) -- stays correctly letterboxed/pillarboxed at any size,
+--- never stretches. See main.lua's F11 handler for the usual call site.
+---@param fullscreen boolean
+function EngineWindow:SetFullscreen(fullscreen) end
+---@return boolean
+function EngineWindow:IsFullscreen() end
+
+--- The engine's window, bound into every script's global scope.
+---@type EngineWindow
+eWindow = nil
+
+-- =====================================================================
 -- Vector2 -- value type (RegisterVector2)
 -- =====================================================================
 ---@class Vector2
@@ -74,6 +122,16 @@ function RigidBody2D:GetRotation() end
 ---@param degrees number
 function RigidBody2D:SetRotation(degrees) end
 
+--- Per-object visual multiplier on top of GetSize()/SetSize()'s logical/
+--- collision size -- deliberately decoupled, so scaling a sprite up/down
+--- visually never silently resizes its CollisionShape2D underneath it.
+---@return number sx
+---@return number sy
+function RigidBody2D:GetScale() end
+---@param sx number
+---@param sy number|nil Defaults to sx -- body:SetScale(2) means uniform 2x
+function RigidBody2D:SetScale(sx, sy) end
+
 ---@param r number
 ---@param g number
 ---@param b number
@@ -132,6 +190,14 @@ function RigidBody2D:GetPlayerConfig() end
 ---@param config PlayerActorConfig|nil
 function RigidBody2D:SetPlayerConfig(config) end
 
+--- When set, this body IS a camera -- Actors.GetActiveCamera() will find
+--- it (if the Camera2D is active) and Renderer2D maps world-space draws
+--- relative to this body's position and the Camera2D's viewportSize.
+---@return Camera2D|nil
+function RigidBody2D:GetCamera() end
+---@param camera Camera2D|nil
+function RigidBody2D:SetCamera(camera) end
+
 --- NOTE: takes a Vector2, not two floats -- the one exception to this
 --- file's usual "hot-path values cross as raw numbers" convention.
 ---@param force Vector2 Accumulated and applied on the next Integrate()
@@ -155,6 +221,12 @@ function RigidBody2D:ResolveCollisionWith(other) end
 ---@param windowHeight number
 ---@return boolean clamped
 function RigidBody2D:ResolveWindowBounds(windowWidth, windowHeight) end
+
+--- If a Camera2D is attached, lerps this body toward followTarget (plus
+--- focusOffset). No-op otherwise. Call once a frame, AFTER whatever it's
+--- following has already moved this frame.
+---@param deltaTime number
+function RigidBody2D:UpdateCamera(deltaTime) end
 
 -- =====================================================================
 -- Shader -- pointer type, owned by ActorRegistry (RegisterShader)
@@ -193,29 +265,6 @@ function Shader:SetVec4(name, x, y, z, w) end
 function Shader:GetOverdrawScale() end
 ---@param scale number
 function Shader:SetOverdrawScale(scale) end
-
--- =====================================================================
--- CollisionShape2D -- pointer type, owned by ActorRegistry
--- (RegisterCollisionShape2D)
--- =====================================================================
----@class CollisionShape2D
-CollisionShape2D = {}
-
----@param halfWidth number
----@param halfHeight number
----@param offsetX number|nil Defaults to 0
----@param offsetY number|nil Defaults to 0
----@return CollisionShape2D
-function CollisionShape2D.NewBox(halfWidth, halfHeight, offsetX, offsetY) end
-
----@param radius number
----@param offsetX number|nil Defaults to 0
----@param offsetY number|nil Defaults to 0
----@return CollisionShape2D
-function CollisionShape2D.NewCircle(radius, offsetX, offsetY) end
-
----@return string # "Box" or "Circle"
-function CollisionShape2D:GetType() end
 
 -- =====================================================================
 -- PixelSprite -- pointer type, owned by ActorRegistry (RegisterPixelSprite).
@@ -257,6 +306,50 @@ Sprite = {}
 function Sprite.Load(filepath) end
 
 -- =====================================================================
+-- Renderer -- bare globals DrawBody(body) / SyncCamera() (RegisterRenderer)
+-- =====================================================================
+
+--- Draws a RigidBody2D's flat-color quad, or -- if it has a PixelSprite
+--- attached -- flushes pending pixel edits and draws it textured instead.
+---@param body RigidBody2D
+function DrawBody(body) end
+
+--- Resolves ActorRegistry's currently-active camera (see
+--- Actors.GetActiveCamera()) and pushes it into the renderer for the
+--- rest of this frame's world-space draws -- including its targetAspect,
+--- the "Border" named shader, and any attached border sprite (see
+--- Actors.SetBorderSprite), so the letterbox/pillarbox margins get
+--- whatever border effect is currently loaded -- or clears it if no
+--- camera is active. Call once per frame (after any camera-follow
+--- update, before your DrawBody() calls) -- deliberately NOT automatic
+--- inside DrawBody() itself, which would re-resolve the active camera on
+--- every single object drawn.
+function SyncCamera() end
+
+-- =====================================================================
+-- CollisionShape2D -- pointer type, owned by ActorRegistry
+-- (RegisterCollisionShape2D)
+-- =====================================================================
+---@class CollisionShape2D
+CollisionShape2D = {}
+
+---@param halfWidth number
+---@param halfHeight number
+---@param offsetX number|nil Defaults to 0
+---@param offsetY number|nil Defaults to 0
+---@return CollisionShape2D
+function CollisionShape2D.NewBox(halfWidth, halfHeight, offsetX, offsetY) end
+
+---@param radius number
+---@param offsetX number|nil Defaults to 0
+---@param offsetY number|nil Defaults to 0
+---@return CollisionShape2D
+function CollisionShape2D.NewCircle(radius, offsetX, offsetY) end
+
+---@return string # "Box" or "Circle"
+function CollisionShape2D:GetType() end
+
+-- =====================================================================
 -- PlayerActorConfig -- pointer type, owned by ActorRegistry
 -- (RegisterPlayerActorConfig)
 -- =====================================================================
@@ -282,53 +375,49 @@ function PlayerActorConfig:IsInputEnabled() end
 function PlayerActorConfig:SetInputEnabled(enabled) end
 
 -- =====================================================================
--- Graphics -- bare globals bound to IGraphicsContext* (RegisterGraphics)
+-- Camera2D -- pointer type, owned by ActorRegistry (RegisterCamera2D)
 -- =====================================================================
+---@class Camera2D
+Camera2D = {}
 
----@param r number Red channel, 0.0 - 1.0
----@param g number Green channel, 0.0 - 1.0
----@param b number Blue channel, 0.0 - 1.0
-function SetClearColor(r, g, b) end
+---@return Camera2D
+function Camera2D.new() end
 
---- Legacy immediate-mode debug quad path (predates the shader-based
---- Renderer2D/DrawBody pipeline). Still present but not the normal way to
---- draw something -- prefer RigidBody2D + DrawBody for anything gameplay.
----@param x number
+---@return number w
+---@return number h
+function Camera2D:GetViewportSize() end
+---@param w number World units visible across the full window -- see Camera2D.h's "resolution control" comment
+---@param h number
+function Camera2D:SetViewportSize(w, h) end
+
+---@return number w
+---@return number h
+function Camera2D:GetTargetAspect() end
+---@param w number Zero (either component) means "not set" -- fit directly to the window using viewportSize's own aspect
+---@param h number
+function Camera2D:SetTargetAspect(w, h) end
+
+---@return number x
+---@return number y
+function Camera2D:GetFocusOffset() end
+---@param x number World-space offset from the follow target the camera actually leans toward -- e.g. (0, -40) frames 40px above the target. Follows "+y is down".
 ---@param y number
----@param width number
----@param height number
----@param rotationDegrees number|nil
----@param r number
----@param g number
----@param b number
----@param a number|nil
-function DrawDebugQuad(x, y, width, height, rotationDegrees, r, g, b, a) end
+function Camera2D:SetFocusOffset(x, y) end
 
--- =====================================================================
--- Window -- eWindow global (RegisterWindow)
--- =====================================================================
----@class EngineWindow
-local EngineWindow = {}
+---@return RigidBody2D|nil
+function Camera2D:GetFollowTarget() end
+---@param target RigidBody2D|nil nil stops following -- drive the camera body's position by hand instead
+function Camera2D:SetFollowTarget(target) end
 
----@return integer
-function EngineWindow:GetWidth() end
----@return integer
-function EngineWindow:GetHeight() end
----@param filepath string PNG path
-function EngineWindow:SetIcon(filepath) end
+---@return number
+function Camera2D:GetFollowSmoothing() end
+---@param perSecond number Exponential-decay follow rate, not a 0..1 blend -- 0 disables auto-follow
+function Camera2D:SetFollowSmoothing(perSecond) end
 
---- The engine's window, bound into every script's global scope.
----@type EngineWindow
-eWindow = nil
-
--- =====================================================================
--- Renderer -- bare global DrawBody(body) (RegisterRenderer)
--- =====================================================================
-
---- Draws a RigidBody2D's flat-color quad, or -- if it has a PixelSprite
---- attached -- flushes pending pixel edits and draws it textured instead.
----@param body RigidBody2D
-function DrawBody(body) end
+---@return boolean
+function Camera2D:IsActive() end
+---@param active boolean Only one active camera drives rendering at a time -- see Actors.GetActiveCamera()
+function Camera2D:SetActive(active) end
 
 -- =====================================================================
 -- Actors -- ActorRegistry-wide queries (RegisterActorRegistry)
@@ -338,6 +427,35 @@ Actors = {}
 
 ---@return RigidBody2D|nil # nil if no body has a PlayerActorConfig attached yet
 function Actors.GetPlayer() end
+
+---@return RigidBody2D|nil # nil if no body has an active Camera2D attached yet
+function Actors.GetActiveCamera() end
+
+--- Returns the cached instance for `name`, compiling it from
+--- ShaderLibrary the first time it's requested. Built-in names: "Glow",
+--- "RoundedPanel", "Textured", "Text", "Border".
+---@param name string
+---@return Shader|nil # nil if nothing is registered under that name
+function Actors.GetNamedShader(name) end
+
+--- Reads a .frag file off disk (paired with the engine's shared vertex
+--- stage, scripts/shaders/quad.vert) and installs it under `name`,
+--- REPLACING whatever's currently cached there. Also swappable at
+--- runtime this way for e.g. "Border" -- see scripts/shaders/*.frag.
+---@param name string
+---@param fragmentPath string
+---@return boolean success
+function Actors.LoadShaderFromFile(name, fragmentPath) end
+
+--- Attaches a PixelSprite behind the letterbox/pillarbox margins,
+--- drawn by SyncCamera() alongside the "Border" named shader whenever
+--- that shader declares `uniform sampler2D u_Texture`. nil for no
+--- texture (procedural border only, the default).
+---@param sprite PixelSprite|nil
+function Actors.SetBorderSprite(sprite) end
+
+---@return PixelSprite|nil
+function Actors.GetBorderSprite() end
 
 --- Logs every RigidBody2D and what's attached to it to stdout.
 function Actors.Dump() end
@@ -416,4 +534,5 @@ function Physics.GetGravity() end
 ---@field Backtick integer
 ---@field Shift integer
 ---@field Ctrl integer
+---@field F11 integer
 Keys = {}

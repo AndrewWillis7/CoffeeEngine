@@ -23,16 +23,23 @@ ActorRegistry::ActorRegistry() {
     // "Border" (see Renderer2D::SetActiveCamera) gets sensible defaults up
     // front, same spirit as CreateGlowShader() setting per-instance
     // defaults right after construction -- so a script that never touches
-    // it still gets a good-looking letterbox instead of flat black
-    // (every uniform GLSL doesn't explicitly set defaults to zero, and
-    // zeroed u_BorderColorA/B would just be solid black). Still fully
-    // Lua-tunable afterward via Actors.GetNamedShader("Border"):SetVec3(...).
+    // it still gets a good-looking night-sky letterbox instead of flat
+    // black (every uniform GLSL doesn't explicitly set defaults to zero,
+    // and a zeroed u_SkyColor/u_StarColor/u_CloudColor would just be
+    // solid black). Still fully Lua-tunable afterward via
+    // Actors.GetNamedShader("Border"):SetVec3(...). u_PixelScale is NOT
+    // set here -- Renderer2D::SetActiveCamera sets it fresh every frame,
+    // right before this shader is ever actually drawn.
     Shader* border = GetOrCreateNamedShader("Border");
     if (border && border->IsValid()) {
-        border->SetVec3("u_BorderColorA", 0.05f, 0.05f, 0.12f);
-        border->SetVec3("u_BorderColorB", 0.35f, 0.10f, 0.45f);
-        border->SetFloat("u_BorderSpeed", 1.5f);
-        border->SetFloat("u_BorderWaveScale", 6.0f);
+        border->SetVec3("u_SkyColor", 0.02f, 0.02f, 0.035f);
+        border->SetVec3("u_StarColor", 0.95f, 0.95f, 1.0f);
+        border->SetVec3("u_CloudColor", 0.12f, 0.12f, 0.14f);
+        border->SetFloat("u_StarCellSize", 8.0f);
+        border->SetFloat("u_CloudCellSize", 48.0f);
+        border->SetFloat("u_CloudBlockSize", 3.0f);
+        border->SetFloat("u_CloudSpeed", 6.0f);
+        border->SetFloat("u_StarTwinkleSpeed", 1.5f);
     }
 }
 

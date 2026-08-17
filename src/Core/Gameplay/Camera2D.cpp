@@ -15,6 +15,11 @@ void Camera2D::Follow(RigidBody2D& selfBody, float dt) {
     float t = 1.0f - std::exp(-followSmoothing * dt);
     t = std::clamp(t, 0.0f, 1.0f);
 
+    // focusOffset shifts what "centered" even means (e.g. framed above
+    // the player) -- added to the raw target position before the lerp,
+    // so the camera eases toward the OFFSET point, not the target itself.
+    Vector2 focusPoint = followTarget->transform.position + focusOffset;
+
     selfBody.transform.position = Vector2::Lerp(
-        selfBody.transform.position, followTarget->transform.position, t);
+        selfBody.transform.position, focusPoint, t);
 }

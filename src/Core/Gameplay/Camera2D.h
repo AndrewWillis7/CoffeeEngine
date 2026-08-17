@@ -50,6 +50,17 @@ public:
     // elsewhere (ActorRegistry), this is just a pointer.
     RigidBody2D* followTarget = nullptr;
 
+    // World-space offset from followTarget's position that the camera
+    // actually leans toward -- e.g. Vector2(0, -40) frames the camera 40
+    // pixels ABOVE the player instead of dead-centered on them (more
+    // headroom to see what's coming in a platformer, less wasted space
+    // below). Zero (default) reproduces the old dead-centered behavior
+    // exactly. Follows the same "+y is down" convention as everything
+    // else (see Vector2.h) -- negative Y moves the framing UP. Only
+    // applies via Follow() below; has no effect if you're driving the
+    // camera body's position by hand (followTarget == nullptr).
+    Vector2 focusOffset = Vector2::Zero();
+
     // Exponential-decay follow rate (per second), NOT a 0..1 blend factor
     // -- this keeps Follow() frame-rate independent (see the .cpp). 0 means
     // "don't move on your own" (Follow() becomes a no-op; drive the body's
@@ -65,11 +76,11 @@ public:
     bool active = true;
 
     // Moves `selfBody` (the RigidBody2D this Camera2D is attached to)
-    // toward followTarget's position by followSmoothing, scaled by dt.
-    // No-op if followTarget is null or followSmoothing <= 0. See
-    // RigidBody2D::UpdateCamera(), which just forwards into this --
-    // exists here (not inline) because it needs RigidBody2D's full
-    // definition (transform.position) which this header only forward-
-    // declares.
+    // toward followTarget's position (plus focusOffset above) by
+    // followSmoothing, scaled by dt. No-op if followTarget is null or
+    // followSmoothing <= 0. See RigidBody2D::UpdateCamera(), which just
+    // forwards into this -- exists here (not inline) because it needs
+    // RigidBody2D's full definition (transform.position) which this
+    // header only forward-declares.
     void Follow(RigidBody2D& selfBody, float dt);
 };
