@@ -24,7 +24,7 @@ function Init()
     -- would be. Centered on the stage; everything below sits ON it (see
     -- the comments at each object for how their Y was derived from this
     -- floor's own top edge, floor_top = 163 - 15/2 = 155.5).
-    floor = StaticBody.new(160, 163, 100, 15, 0.3, 0.5, 0.3)
+    floor = StaticBody.new(160, 163, 1000, 15, 0.0, 0.0, 0.0)
 
     -- 16x48 -- one player-width wide, one and a half player-heights
     -- tall, so it visibly reads as taller than the player rather than
@@ -75,6 +75,8 @@ function Init()
     -- 140 degrees points from this corner down toward the floor/campfire
     -- area (0 = +X/right, 90 = +Y/down -- see Spotlight.lua's comment).
     spotlight = Spotlight.new(300, 10, 140)
+    spotlight2 = Spotlight.new(-300, 10, 140)
+    spotlight2.light:SetColor(1.0, 0.0, 0.0, 1.0)
 
     -- Background decoration -- no collision, never simulated, just sits
     -- there. crate.png is natively 40x40; SetScale(1.5) draws it at
