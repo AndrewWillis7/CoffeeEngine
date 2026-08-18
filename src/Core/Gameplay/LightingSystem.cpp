@@ -19,7 +19,16 @@ constexpr float kRadToDeg = 180.0f / kPi;
 // about HOW the system samples the world, not what any one light looks
 // like, so a single engine-wide value is the right knob until profiling
 // says otherwise.
-constexpr float kStepPixels = 2.0f;          // world-pixel distance advanced per ray-march step
+//
+// kStepPixels is a texel count, not a fraction -- so it needs to track
+// how fine-grained the content actually is. At 2.0 it only samples ~8
+// columns across a 16-texel-wide sprite per ray, which reads as visibly
+// gappy/stair-stepped lighting on something that small (it was fine
+// against the old 50-texel-wide placeholder player). 1.0 keeps every
+// texel column reachable by at least one ray without doubling the
+// engine's actual bottleneck (candidate-body count, still O(n) with no
+// broad-phase index) -- see the "on the horizon" list.
+constexpr float kStepPixels = 1.0f;          // world-pixel distance advanced per ray-march step
 constexpr float kRayDegreesPerSample = 2.0f; // target angular resolution
 constexpr int kMinRays = 12;
 constexpr int kMaxRays = 220; // caps a full 360-degree Point light at ~1.6 deg resolution

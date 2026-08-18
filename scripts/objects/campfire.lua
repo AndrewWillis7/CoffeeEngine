@@ -23,7 +23,7 @@ function Campfire.new(x, y, size)
     self.light = LightEmitterConfig.new()
     self.light:SetType("Point")
     self.light:SetColor(1.0, 0.55, 0.15, 1.0) -- warm orange
-    self.light:SetRadius(140)
+    self.light:SetRadius(60)
     self.light:SetBrightness(1.1)
     self.light:SetFalloffExponent(2.0)
 

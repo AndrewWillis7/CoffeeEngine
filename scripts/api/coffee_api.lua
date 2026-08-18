@@ -419,6 +419,11 @@ function Camera2D:IsActive() end
 ---@param active boolean Only one active camera drives rendering at a time -- see Actors.GetActiveCamera()
 function Camera2D:SetActive(active) end
 
+---@return integer
+function Camera2D:GetZoomOut() end
+---@param zoom integer Multiplies viewportSize when framing the world (1 = unzoomed). Clamped to >= 1. Kept a whole number so every texel always scales by the same on-screen amount as its neighbors -- see Camera2D.h.
+function Camera2D:SetZoomOut(zoom) end
+
 -- =====================================================================
 -- Actors -- ActorRegistry-wide queries (RegisterActorRegistry)
 -- =====================================================================

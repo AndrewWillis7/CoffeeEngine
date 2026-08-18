@@ -434,8 +434,9 @@ void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
 // hot-path "two raw numbers" convention as RigidBody2D::velocity/size);
 // followTarget is a direct RigidBody2D* field (PtrProperty, nil-clears-it
 // setter, same convention as RigidBody2D::shader/collisionShape/
-// playerConfig); followSmoothing/active are plain scalar fields. Nothing
-// here needs a hand-written trampoline.
+// playerConfig); followSmoothing/active are plain scalar fields. zoomOut
+// is bound as Method<>, not Property<>, because it's a private field
+// behind a clamping setter (SetZoomOut rejects <= 0) -- see Camera2D.h.
 // =====================================================================
 
 void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
@@ -446,6 +447,8 @@ void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&Camera2D::followTarget>("GetFollowTarget", "SetFollowTarget")
         .Property<&Camera2D::followSmoothing>("GetFollowSmoothing", "SetFollowSmoothing")
         .Property<&Camera2D::active>("IsActive", "SetActive")
+        .Method<&Camera2D::GetZoomOut>("GetZoomOut")
+        .Method<&Camera2D::SetZoomOut>("SetZoomOut")
         .Finish();
 
     LuaBinding::Table(L).Function<&ActorRegistry::CreateCamera>("new", actors).Finish("Camera2D");
@@ -682,7 +685,7 @@ int Lua_SyncCamera(lua_State* L) {
             borderTexture = borderSprite->GetTexture();
         }
 
-        renderer->SetActiveCamera(camBody->transform.position, camBody->camera->viewportSize,
+        renderer->SetActiveCamera(camBody->transform.position, camBody->camera->EffectiveViewportSize(),
                                    camBody->camera->targetAspect, border, borderTexture);
     } else {
         renderer->ClearActiveCamera();

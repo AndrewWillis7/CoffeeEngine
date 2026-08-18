@@ -4,14 +4,28 @@
 -- of a search-and-replace.
 local Constants = {}
 
+-- The player's native pixel-art size, in texels -- the one number every
+-- other shape/resolution/light-radius choice in this file is scaled
+-- relative to, so the whole scene reads as "on the same grid" instead of
+-- each object's size being picked independently. Change these two
+-- numbers and re-derive everything else that depends on them (see the
+-- comments below) rather than hand-tuning sizes in isolation.
+Constants.PLAYER_WIDTH = 16
+Constants.PLAYER_HEIGHT = 32
+
 -- Native pixel-art resolution -- what Camera2D's viewportSize
--- "resolution control" knob (see Camera2D.h) is normally set to.
--- 640x360 is exactly 16:9 at a clean 2x scale of the also-common
--- 320x180, fine-grained enough for real pixel art without being so
--- large that individual pixels stop reading as "pixels" once scaled up
--- to a normal window/monitor size.
-Constants.RESOLUTION_WIDTH = 640
-Constants.RESOLUTION_HEIGHT = 360
+-- "resolution control" knob (see Camera2D.h) is normally set to. Sized
+-- relative to PLAYER_WIDTH/HEIGHT above: 320 wide is 20 player-widths
+-- across, 180 tall is a little over 5.5 player-heights -- a normal
+-- platformer framing (a few character-heights of headroom/fall room
+-- visible at once), not a huge window with a tiny character lost in it.
+-- Still exactly 16:9, matching ASPECT_WIDTH/HEIGHT below, and happens to
+-- be Camera2D's own class-default (see its header) -- no coincidence,
+-- it's a well-worn "chunky pixel art" reference resolution for
+-- character sizes in this range (comparable to Axiom Verge/Celeste-era
+-- proportions).
+Constants.RESOLUTION_WIDTH = 320
+Constants.RESOLUTION_HEIGHT = 180
 
 -- Target aspect ratio the camera's content rect is letterboxed/
 -- pillarboxed into, independent of the real window's own aspect -- see

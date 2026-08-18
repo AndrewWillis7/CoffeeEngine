@@ -12,10 +12,39 @@ function Init()
     Physics.SetGravity(0, 980)
     SetPixelScale(1);
 
-    player = Player.new(400, 300, 50, 50)
-    wall = StaticBody.new(600, 300, 30, 200, 0.6, 0.2, 0.2)
-    floor = StaticBody.new(400, 580, 800, 40, 0.3, 0.5, 0.3)
-    crate = Prop.new(250, 400, 40, 40, "Art/crate.png")
+    -- Player is the base unit everything else on this floor is laid out
+    -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
+    -- above the floor's open left end and falls onto it.
+    player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT)
+
+    -- Floor is 100x15 texels -- NOT meant to span the whole native
+    -- viewport (320 wide); it's a single starting platform with open
+    -- world beyond both ends, the same way a real level's first screen
+    -- would be. Centered on the stage; everything below sits ON it (see
+    -- the comments at each object for how their Y was derived from this
+    -- floor's own top edge, floor_top = 163 - 15/2 = 155.5).
+    floor = StaticBody.new(160, 163, 100, 15, 0.3, 0.5, 0.3)
+
+    -- 16x48 -- one player-width wide, one and a half player-heights
+    -- tall, so it visibly reads as taller than the player rather than
+    -- just a same-size box with a different color. Sits at the floor's
+    -- right end: center_y = floor_top - 48/2 = 131.5.
+    wall = StaticBody.new(198, 131.5, 16, 48, 0.6, 0.2, 0.2)
+
+    -- crate.png is a real 40x40 PNG asset -- RigidBody2D::SetSprite
+    -- forces body.size to the SPRITE's native pixel dimensions the
+    -- moment it's attached (see ScriptBindings.cpp), so passing smaller
+    -- w/h here wouldn't actually shrink it, and scaling it down visually
+    -- with SetScale (like `background` below does) would just make a
+    -- smoothly-minified miniature of a 40x40 image rather than genuine
+    -- chunky pixel art on the SAME texel grid as the 16x32 player --
+    -- it'd stop reading as "on the grid" the moment it's smaller than
+    -- native. Left at its real size and just repositioned for now
+    -- (floor_top - 40/2 = 135.5) -- a deliberately oversized crate is a
+    -- reasonable art choice, but if you want it grid-consistent instead,
+    -- that means re-exporting crate.png itself at ~16x16, not scaling
+    -- the existing file. Happy to help with that either way.
+    --crate = Prop.new(146, 135.5, 40, 40, "Art/crate.png")
 
     -- Casts a hard shadow -- light_blocking bodies stop a light ray dead
     -- at their first solid pixel instead of letting it pass through (see
@@ -24,18 +53,24 @@ function Init()
     -- still tints whatever solid pixels it touches along the way.
     wall.body:SetLightBlocking(true)
 
-    -- A campfire sitting just left of the wall -- walk the player toward
-    -- it and watch the floor/wall/crate pixels nearest it warm up to
-    -- orange, live, every frame (nothing here is baked).
-    campfire = Campfire.new(520, 545)
+    -- Sits in the open gap between the crate and the wall (floor_top -
+    -- 16/2 = 147.5, its own default 16x16 size matches PLAYER_WIDTH
+    -- exactly). Walk the player toward it from the spawn point and
+    -- watch the floor/wall/crate/player's own pixels nearest it warm up
+    -- to orange, live, every frame (nothing here is baked) -- see
+    -- Campfire.lua for why its radius is 60, not the old 140.
+    campfire = Campfire.new(178, 147.5)
 
     -- Background decoration -- no collision, never simulated, just sits
-    -- there. crate.png is natively 40x40; SetScale(3) draws it at 120x120
-    -- without touching its logical size (GetSize() still reports 40x40).
-    background = ArtObject.new(400, 150, 40, 40, "Art/crate.png")
-    background:SetScale(3)
+    -- there. crate.png is natively 40x40; SetScale(1.5) draws it at
+    -- 60x60 without touching its logical size (GetSize() still reports
+    -- 40x40) -- repositioned to sit in-frame on the new 320x180 stage
+    -- (it used to be at x=400, entirely off the left edge of this
+    -- resolution).
+    --background = ArtObject.new(160, 55, 40, 40, "Art/crate.png")
+    --background:SetScale(1.5)
 
-    solids = {floor.body, wall.body, crate.body}
+    solids = {floor.body, wall.body}
 
     -- Native pixel-art resolution + aspect, see core.constants -- the
     -- "resolution control" knob; every world pixel draws
@@ -54,8 +89,10 @@ function Init()
     -- on them -- more headroom to see what's coming (platforms, enemies,
     -- the crate above), less wasted space below. Negative Y is up (see
     -- Vector2.h's "+y is down" convention). ~11% of the native vertical
-    -- resolution reads as a gentle, not-too-aggressive offset.
-    camera.camera:SetFocusOffset(0, -40)
+    -- resolution reads as a gentle, not-too-aggressive offset -- was -40
+    -- against the old 360-tall viewport, rescaled to -20 against the
+    -- new 180-tall one to keep that same proportion.
+    camera.camera:SetFocusOffset(0, -20)
 
     -- The border (drawn behind everything, filling whatever the fit
     -- above doesn't cover) defaults to a black night sky with sparse
@@ -82,8 +119,13 @@ function Update(deltaTime)
         eWindow:SetFullscreen(not eWindow:IsFullscreen())
     end
 
-    player:Update(deltaTime, solids)
-    crate:Update(deltaTime, solids)
+    -- Constants.RESOLUTION_WIDTH/HEIGHT doubles as the play area's
+    -- bounds here (texels, not real window pixels -- see Player:Update's
+    -- comment) because this level fits entirely within one camera
+    -- frame. A level that scrolls beyond what the camera shows at once
+    -- would need its own, separate level-bounds concept instead of
+    -- reusing the camera's native resolution for this.
+    player:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
 
     -- Camera reacts AFTER gameplay has moved this frame, so it's chasing
     -- the freshest player position, then gets pushed to the renderer once
@@ -97,10 +139,14 @@ function Update(deltaTime)
     -- SyncCamera() -- see UpdateLighting()'s comment in ScriptBindings.cpp.
     UpdateLighting(deltaTime)
 
-    background:Draw()
-    player:Draw()
-    wall:Draw()
-    crate:Draw()
+    -- Environment first, player on top of it -- with the crate/floor/
+    -- wall now sized close enough to the player to actually sit flush
+    -- against it (see their spawn positions above), drawing the player
+    -- BEFORE them meant an adjacent crate could paint right over it.
+    -- Campfire drawn last so its glow reads as sitting in front of
+    -- whoever's standing next to it.
     floor:Draw()
+    wall:Draw()
+    player:Draw()
     campfire:Draw()
 end

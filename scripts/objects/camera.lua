@@ -42,4 +42,16 @@ function Camera:Update(deltaTime)
     self.body:UpdateCamera(deltaTime)
 end
 
+-- Integer zoom-out, layered on top of whatever viewportW/H were passed
+-- to Camera.new() -- 1 (default) is unzoomed, 2 shows twice as many
+-- texels along each axis, etc. See Camera2D::SetZoomOut's header
+-- comment for why this stays a whole number instead of a float.
+function Camera:SetZoomOut(zoom)
+    self.camera:SetZoomOut(zoom)
+end
+
+function Camera:GetZoomOut()
+    return self.camera:GetZoomOut()
+end
+
 return Camera

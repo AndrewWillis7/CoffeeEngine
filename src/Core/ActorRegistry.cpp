@@ -225,7 +225,8 @@ void ActorRegistry::DumpTree() const {
         }
         if (body->camera) {
             std::cout << "    - Camera2D: attached (active=" << (body->camera->active ? "true" : "false")
-                       << " viewport=" << body->camera->viewportSize.x << "x" << body->camera->viewportSize.y << ")\n";
+                       << " viewport=" << body->camera->viewportSize.x << "x" << body->camera->viewportSize.y
+                       << " zoomOut=" << body->camera->GetZoomOut() << ")\n";
         } else {
             std::cout << "    - Camera2D: none\n";
         }

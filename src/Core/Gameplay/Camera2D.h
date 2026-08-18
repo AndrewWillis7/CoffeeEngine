@@ -75,6 +75,42 @@ public:
     // has active == true.
     bool active = true;
 
+    // Integer runtime zoom-out, layered ON TOP of viewportSize rather
+    // than replacing it. viewportSize stays exactly what it's always
+    // been -- the NATIVE/reference texel resolution the art was designed
+    // at (e.g. 640x360, see scripts/core/constants.lua) -- so gameplay
+    // code never has to remember and restore a "base" number after
+    // zooming; it just dials zoomOut up or down and viewportSize is
+    // never touched.
+    //
+    // 1 (default) shows exactly viewportSize texels -- unzoomed. 2 shows
+    // viewportSize*2 texels along each axis, i.e. twice as much world
+    // fits in the same on-screen content rect, so every texel draws at
+    // HALF its native on-screen size ("zoomed out"). Kept a whole number
+    // deliberately: since Renderer2D letterboxes a FIXED content rect
+    // (see Renderer2D::SetActiveCamera), "how many texels are visible"
+    // and "how big one texel draws on screen" are the same dial, just
+    // read in reciprocal units -- a non-integer zoom would make that
+    // dial land between two texels' worth of screen space, so some
+    // texels would draw a fraction of a screen pixel differently than
+    // their neighbors (uneven/blurry chunky pixel art). Whole-number
+    // zoom guarantees every texel always scales by the exact same
+    // on-screen amount as every other texel.
+    //
+    // Not a public field like viewportSize/targetAspect above --
+    // SetZoomOut() clamps to >= 1 so a stray 0/negative value from a
+    // script can never collapse or invert the camera's framing.
+    int GetZoomOut() const { return m_ZoomOut; }
+    void SetZoomOut(int zoom) { m_ZoomOut = zoom > 0 ? zoom : 1; }
+
+    // What Renderer2D::SetActiveCamera actually gets fed each frame (see
+    // ScriptBindings.cpp's Lua_SyncCamera) -- viewportSize scaled by the
+    // current zoom. Any caller that wants "what's visible RIGHT NOW"
+    // should read this, not viewportSize directly.
+    Vector2 EffectiveViewportSize() const {
+        return viewportSize * static_cast<float>(m_ZoomOut);
+    }
+
     // Moves `selfBody` (the RigidBody2D this Camera2D is attached to)
     // toward followTarget's position (plus focusOffset above) by
     // followSmoothing, scaled by dt. No-op if followTarget is null or
@@ -83,4 +119,7 @@ public:
     // RigidBody2D's full definition (transform.position) which this
     // header only forward-declares.
     void Follow(RigidBody2D& selfBody, float dt);
+
+private:
+    int m_ZoomOut = 1;
 };

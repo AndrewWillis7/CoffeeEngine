@@ -66,11 +66,22 @@ end
 -- (e.g. {floor, wall, crate}). Kept as a plain parameter rather than
 -- something Player tracks itself -- which bodies count as "solid" is a
 -- level concern, not a player concern.
-function Player:Update(deltaTime, solids)
+--
+-- worldWidth/worldHeight: the play area's bounds IN TEXELS (world
+-- units) -- e.g. Constants.RESOLUTION_WIDTH/HEIGHT for a level that fits
+-- entirely within one camera frame. Deliberately NOT eWindow:GetWidth()/
+-- GetHeight() -- those are REAL window/monitor pixels, a completely
+-- different number from the texel grid every body's position/size is
+-- authored in the moment a Camera2D with its own viewportSize is in
+-- play (see Camera2D.h). Falls back to the real window size only if the
+-- caller doesn't pass anything, so this stays harmless for a script that
+-- never sets up a camera at all (the old "world pixels == window
+-- pixels" identity-mapping default -- see Renderer2D::ApplyCommonUniforms).
+function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self:HandleInput()
     self.body:Integrate(deltaTime)
 
-    self.body:ResolveWindowBounds(eWindow:GetWidth(), eWindow:GetHeight())
+    self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
     if solids then
         for _, solid in ipairs(solids) do
             self.body:ResolveCollisionWith(solid)

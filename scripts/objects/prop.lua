@@ -32,10 +32,11 @@ function Prop.new(x, y, w, h, spritePath, r, g, b, a)
 end
 
 -- solids: array of RigidBody2D to resolve collisions against this frame,
--- same convention Player:Update() already uses.
-function Prop:Update(deltaTime, solids)
+-- same convention Player:Update() already uses. worldWidth/worldHeight:
+-- see Player:Update's comment -- texels, not real window pixels.
+function Prop:Update(deltaTime, solids, worldWidth, worldHeight)
     self.body:Integrate(deltaTime)
-    self.body:ResolveWindowBounds(eWindow:GetWidth(), eWindow:GetHeight())
+    self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
     if solids then
         for _, solid in ipairs(solids) do
             self.body:ResolveCollisionWith(solid)
