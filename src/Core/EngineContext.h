@@ -5,6 +5,7 @@ class IWindow;
 class Renderer2D;
 class ActorRegistry;
 class UserInputService;
+class LightingSystem;
 
 // Bundles pointers to engine subsystems that need exposing
 
@@ -14,4 +15,5 @@ struct EngineContext {
     Renderer2D* renderer = nullptr;
     ActorRegistry* actors = nullptr;
     UserInputService* input = nullptr;
+    LightingSystem* lighting = nullptr;
 };

@@ -3,17 +3,31 @@ local StaticBody = require("objects.static_body")
 local Prop = require("objects.prop")
 local Camera = require("objects.camera")
 local ArtObject = require("objects.art_object")
+local Campfire = require("objects.campfire")
 local Constants = require("core.constants")
 
 function Init()
     print("Engine Initialized")
     SetClearColor(0.05, 0.05, 0.08)
     Physics.SetGravity(0, 980)
+    SetPixelScale(1);
 
     player = Player.new(400, 300, 50, 50)
     wall = StaticBody.new(600, 300, 30, 200, 0.6, 0.2, 0.2)
     floor = StaticBody.new(400, 580, 800, 40, 0.3, 0.5, 0.3)
     crate = Prop.new(250, 400, 40, 40, "Art/crate.png")
+
+    -- Casts a hard shadow -- light_blocking bodies stop a light ray dead
+    -- at their first solid pixel instead of letting it pass through (see
+    -- LightingSystem.h). Everything else (floor, crate, the player) is
+    -- lit-but-not-blocking by default: light passes through them but
+    -- still tints whatever solid pixels it touches along the way.
+    wall.body:SetLightBlocking(true)
+
+    -- A campfire sitting just left of the wall -- walk the player toward
+    -- it and watch the floor/wall/crate pixels nearest it warm up to
+    -- orange, live, every frame (nothing here is baked).
+    campfire = Campfire.new(520, 545)
 
     -- Background decoration -- no collision, never simulated, just sits
     -- there. crate.png is natively 40x40; SetScale(3) draws it at 120x120
@@ -77,9 +91,16 @@ function Update(deltaTime)
     camera:Update(deltaTime)
     SyncCamera()
 
+    -- Recomputes every light's per-pixel tint fresh THIS frame -- never
+    -- baked, so a light that moved (or the player walking past one)
+    -- shows up immediately. Runs once a frame, same convention as
+    -- SyncCamera() -- see UpdateLighting()'s comment in ScriptBindings.cpp.
+    UpdateLighting(deltaTime)
+
     background:Draw()
     player:Draw()
     wall:Draw()
     crate:Draw()
     floor:Draw()
+    campfire:Draw()
 end

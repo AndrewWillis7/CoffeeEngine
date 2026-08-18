@@ -21,16 +21,22 @@ local ArtObject = Class()
 ---@param y number
 ---@param w number
 ---@param h number
----@param spritePath string|nil PNG path -- if given, replaces the flat-color quad with this texture
-function ArtObject.new(x, y, w, h, spritePath)
+---@param spritePath string|nil PNG path -- if given, replaces the generated solid-color sprite with this texture
+---@param r number|nil Fill color if no spritePath given. Defaults to 1
+---@param g number|nil Fill color if no spritePath given. Defaults to 1
+---@param b number|nil Fill color if no spritePath given. Defaults to 1
+---@param a number|nil Fill color if no spritePath given. Defaults to 1
+function ArtObject.new(x, y, w, h, spritePath, r, g, b, a)
     local self = setmetatable({}, ArtObject)
 
     self.body = RigidBody2D.new(x, y, w, h)
 
     if spritePath then
         self.sprite = Sprite.Load(spritePath)
-        self.body:SetSprite(self.sprite)
+    else
+        self.sprite = Sprite.NewSolid(w, h, r or 1.0, g or 1.0, b or 1.0, a or 1.0)
     end
+    self.body:SetSprite(self.sprite)
 
     return self
 end

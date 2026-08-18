@@ -2,6 +2,7 @@
 #include "../OS_/stb_image.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 
 PixelSprite::PixelSprite(const std::string& filepath, Texture::Filter filter) {
@@ -20,17 +21,47 @@ PixelSprite::PixelSprite(const std::string& filepath, Texture::Filter filter) {
     m_Pixels.assign(data, data + (static_cast<size_t>(m_Width) * static_cast<size_t>(m_Height) * 4));
     stbi_image_free(data);
 
-    m_Texture = std::make_unique<Texture>(m_Pixels.data(), m_Width, m_Height, Texture::Format::RGBA, filter);
+    m_LitPixels = m_Pixels; // unlit == base until LightingSystem says otherwise
+    m_Texture = std::make_unique<Texture>(m_LitPixels.data(), m_Width, m_Height, Texture::Format::RGBA, filter);
+}
+
+PixelSprite::PixelSprite(int width, int height, const Color& fill, Texture::Filter filter)
+    : m_Width(width), m_Height(height) {
+    if (width <= 0 || height <= 0) {
+        std::cerr << "Engine Warning: PixelSprite(width, height, fill) got a non-positive size ("
+                   << width << "x" << height << ") -- leaving invalid.\n";
+        m_Width = m_Height = 0;
+        return;
+    }
+
+    unsigned char r = static_cast<unsigned char>(std::clamp(fill.r, 0.0f, 1.0f) * 255.0f);
+    unsigned char g = static_cast<unsigned char>(std::clamp(fill.g, 0.0f, 1.0f) * 255.0f);
+    unsigned char b = static_cast<unsigned char>(std::clamp(fill.b, 0.0f, 1.0f) * 255.0f);
+    unsigned char a = static_cast<unsigned char>(std::clamp(fill.a, 0.0f, 1.0f) * 255.0f);
+
+    m_Pixels.resize(static_cast<size_t>(m_Width) * static_cast<size_t>(m_Height) * 4);
+    for (size_t i = 0; i < m_Pixels.size(); i += 4) {
+        m_Pixels[i + 0] = r; m_Pixels[i + 1] = g; m_Pixels[i + 2] = b; m_Pixels[i + 3] = a;
+    }
+
+    m_LitPixels = m_Pixels;
+    m_Texture = std::make_unique<Texture>(m_LitPixels.data(), m_Width, m_Height, Texture::Format::RGBA, filter);
 }
 
 void PixelSprite::SetPixel(int x, int y, const Color& color) {
     if (x < 0 || y < 0 || x >= m_Width || y >= m_Height) return;
 
     size_t i = (static_cast<size_t>(y) * m_Width + x) * 4;
-    m_Pixels[i + 0] = static_cast<unsigned char>(std::clamp(color.r, 0.0f, 1.0f) * 255.0f);
-    m_Pixels[i + 1] = static_cast<unsigned char>(std::clamp(color.g, 0.0f, 1.0f) * 255.0f);
-    m_Pixels[i + 2] = static_cast<unsigned char>(std::clamp(color.b, 0.0f, 1.0f) * 255.0f);
-    m_Pixels[i + 3] = static_cast<unsigned char>(std::clamp(color.a, 0.0f, 1.0f) * 255.0f);
+    unsigned char r = static_cast<unsigned char>(std::clamp(color.r, 0.0f, 1.0f) * 255.0f);
+    unsigned char g = static_cast<unsigned char>(std::clamp(color.g, 0.0f, 1.0f) * 255.0f);
+    unsigned char b = static_cast<unsigned char>(std::clamp(color.b, 0.0f, 1.0f) * 255.0f);
+    unsigned char a = static_cast<unsigned char>(std::clamp(color.a, 0.0f, 1.0f) * 255.0f);
+
+    m_Pixels[i + 0] = r; m_Pixels[i + 1] = g; m_Pixels[i + 2] = b; m_Pixels[i + 3] = a;
+    // Mirror straight into the lit buffer too -- an authored edit must be
+    // visible immediately even on a pixel no light happens to be touching
+    // this frame (the common case: most of a sprite, most of the time).
+    m_LitPixels[i + 0] = r; m_LitPixels[i + 1] = g; m_LitPixels[i + 2] = b; m_LitPixels[i + 3] = a;
     MarkDirty(x, y, 1, 1);
 }
 
@@ -59,11 +90,44 @@ void PixelSprite::PunchCircle(int cx, int cy, float radius) {
             float dx = static_cast<float>(x - cx);
             float dy = static_cast<float>(y - cy);
             if (dx * dx + dy * dy <= r2) {
-                m_Pixels[(static_cast<size_t>(y) * m_Width + x) * 4 + 3] = 0;
+                size_t alphaIdx = (static_cast<size_t>(y) * m_Width + x) * 4 + 3;
+                m_Pixels[alphaIdx] = 0;
+                m_LitPixels[alphaIdx] = 0; // keep both buffers' solidity in lockstep
             }
         }
     }
     MarkDirty(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+void PixelSprite::ResetLightingRect(int minX, int minY, int maxX, int maxY) {
+    minX = std::max(0, minX);
+    minY = std::max(0, minY);
+    maxX = std::min(m_Width - 1, maxX);
+    maxY = std::min(m_Height - 1, maxY);
+    if (minX > maxX || minY > maxY) return; // fully off-sprite, nothing to do
+
+    size_t rowBytes = (static_cast<size_t>(maxX - minX) + 1) * 4;
+    for (int y = minY; y <= maxY; ++y) {
+        size_t rowStart = (static_cast<size_t>(y) * m_Width + minX) * 4;
+        std::memcpy(m_LitPixels.data() + rowStart, m_Pixels.data() + rowStart, rowBytes);
+    }
+    MarkDirty(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+void PixelSprite::AccumulateLightTint(int x, int y, const Color& tint, float strength) {
+    if (x < 0 || y < 0 || x >= m_Width || y >= m_Height || strength <= 0.0f) return;
+
+    size_t i = (static_cast<size_t>(y) * m_Width + x) * 4;
+    if (m_Pixels[i + 3] == 0) return; // nothing solid/drawn here -- don't light empty space
+
+    float r = m_LitPixels[i + 0] / 255.0f + tint.r * strength;
+    float g = m_LitPixels[i + 1] / 255.0f + tint.g * strength;
+    float b = m_LitPixels[i + 2] / 255.0f + tint.b * strength;
+    m_LitPixels[i + 0] = static_cast<unsigned char>(std::clamp(r, 0.0f, 1.0f) * 255.0f);
+    m_LitPixels[i + 1] = static_cast<unsigned char>(std::clamp(g, 0.0f, 1.0f) * 255.0f);
+    m_LitPixels[i + 2] = static_cast<unsigned char>(std::clamp(b, 0.0f, 1.0f) * 255.0f);
+    // Alpha untouched -- lighting only ever recolors, never changes solidity.
+    MarkDirty(x, y, 1, 1);
 }
 
 void PixelSprite::MarkDirty(int x, int y, int w, int h) {
@@ -87,7 +151,7 @@ void PixelSprite::Flush() {
     int w = m_DirtyMaxX - m_DirtyMinX + 1;
     int h = m_DirtyMaxY - m_DirtyMinY + 1;
 
-    const unsigned char* regionStart = m_Pixels.data() + (static_cast<size_t>(y) * m_Width + x) * 4;
+    const unsigned char* regionStart = m_LitPixels.data() + (static_cast<size_t>(y) * m_Width + x) * 4;
     m_Texture->UpdateRegion(x, y, w, h, regionStart);
 
     m_Dirty = false;

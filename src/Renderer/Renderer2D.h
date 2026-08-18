@@ -95,6 +95,38 @@ public:
 
     Shader* GetDefaultShader() const { return m_DefaultShader.get();}
 
+    // Global "chunky pixel art" scale -- how many real/window pixels one
+    // game pixel (one PixelSprite texel, or one world unit for a flat-
+    // color body -- the two are the same thing in this engine, see
+    // RigidBody2D::SetSprite) renders as. Applies uniformly to every
+    // WORLD-space draw (DrawQuad/DrawTexturedQuad) regardless of which
+    // actor, sprite, or shader is doing the drawing -- there's exactly
+    // one Renderer2D for the whole engine, so this is automatically
+    // "global to all actors" the moment it's set, with no per-actor
+    // bookkeeping needed. Screen-space draws (DrawScreenQuad/
+    // DrawScreenTexturedQuad -- the debug UI panel) are deliberately
+    // EXEMPT, same "UI shouldn't be forced onto the game's pixel grid"
+    // reasoning ApplyCommonUniforms' u_PixelSnap comment already uses --
+    // UI stays crisp at native resolution no matter how chunky the game
+    // world gets.
+    //
+    // Implemented as a divisor on the effective u_ViewportSize fed to the
+    // vertex shader (see ApplyCommonUniforms) -- mathematically identical
+    // to zooming the camera in, just exposed as a plain "N pixels per
+    // game pixel" multiplier instead of asking a script to reason about
+    // Camera2D::viewportSize's absolute world-unit count. Does NOT touch
+    // the actual on-screen CONTENT RECT size/letterboxing computed by
+    // SetActiveCamera -- only how many world units get packed into
+    // whatever rect that already produced, so it composes cleanly with
+    // camera aspect-fitting instead of fighting it.
+    //
+    // 1.0 (the default) is an exact no-op; invalid input (<= 0) is
+    // clamped back to 1.0 rather than risking a divide-by-zero/negative
+    // viewport, same defensive spirit SetActiveCamera already uses for a
+    // zero/negative Camera2D::viewportSize.
+    void SetPixelScale(float scale);
+    float GetPixelScale() const { return m_PixelScale; }
+
 private:
     // world: true uses the active camera (if any) via ApplyCommonUniforms'
     // cameraPos/viewportSize args; world: false (screen-space) always
@@ -141,4 +173,5 @@ private:
     ViewportMode m_ViewportMode = ViewportMode::FullWindow;
 
     bool m_Initialized = false;
+    float m_PixelScale = 1.0f;
 };

@@ -7,6 +7,8 @@
 #include "Core/Physics/CollisionShape2D.h"
 #include "Core/Gameplay/PlayerActorConfig.h"
 #include "Core/Gameplay/Camera2D.h"
+#include "Core/Gameplay/LightEmitterConfig.h"
+#include "Core/Gameplay/LightingSystem.h"
 #include "Core/Math/Vector2.h"
 #include "Core/Math/Transform2D.h"
 #include "Core/Math/Color.h"
@@ -39,6 +41,7 @@ namespace LuaBinding {
     template <> struct MetatableOf<Camera2D>            { static constexpr const char* name = "Coffee.Camera2D"; };
     template <> struct MetatableOf<IWindow>             { static constexpr const char* name = "Coffee.IWindow"; };
     template <> struct MetatableOf<PixelSprite>         { static constexpr const char* name = "Coffee.PixelSprite"; };
+    template <> struct MetatableOf<LightEmitterConfig>  { static constexpr const char* name = "Coffee.LightEmitterConfig"; };
 
     template <> struct IsValueType<Vector2> : std::true_type {};
 
@@ -236,6 +239,8 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&RigidBody2D::collisionShape>("GetCollisionShape", "SetCollisionShape")
         .PtrProperty<&RigidBody2D::playerConfig>("GetPlayerConfig", "SetPlayerConfig")
         .PtrProperty<&RigidBody2D::camera>("GetCamera", "SetCamera")
+        .PtrProperty<&RigidBody2D::lightEmitter>("GetLightEmitter", "SetLightEmitter")
+        .Property<&RigidBody2D::lightBlocking>("IsLightBlocking", "SetLightBlocking")
         .Method<&RigidBody2D::AddForce>("AddForce")
         .Method<&RigidBody2D::Integrate>("Integrate")
         .Method<&RigidBody2D::IsGrounded>("IsGrounded")
@@ -338,6 +343,30 @@ int Lua_PixelSpriteLoad(lua_State* L) {
     return 1;
 }
 
+// Sprite.NewSolid(w, h, r, g, b, a) -- builds a blank, in-memory sprite
+// filled solid with the given color, no PNG involved (see PixelSprite's
+// (int,int,Color) constructor and ActorRegistry::CreateSolidSprite).
+// This is the "split a basic flat-color square into individual pixels"
+// primitive -- StaticBody/Prop/Player/ArtObject all call this instead of
+// leaving a plain flat-color quad, so every basic body is pixel-
+// addressable (and therefore lightable/eventually destructible) by
+// default. a defaults to fully opaque, same convention as
+// Lua_RigidBody2DSetColor.
+int Lua_PixelSpriteNewSolid(lua_State* L) {
+    int w = static_cast<int>(luaL_checkinteger(L, 1));
+    int h = static_cast<int>(luaL_checkinteger(L, 2));
+    float r = static_cast<float>(luaL_checknumber(L, 3));
+    float g = static_cast<float>(luaL_checknumber(L, 4));
+    float b = static_cast<float>(luaL_checknumber(L, 5));
+    float a = static_cast<float>(luaL_optnumber(L, 6, 1.0));
+
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(1)));
+    luaL_argcheck(L, actors != nullptr, 1, "engine has no ActorRegistry bound");
+
+    LuaBinding::Value<PixelSprite*>::Push(L, actors->CreateSolidSprite(w, h, r, g, b, a));
+    return 1;
+}
+
 int Lua_PixelSpritePunchCircle(lua_State* L) {
     PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
     int cx = static_cast<int>(luaL_checknumber(L, 2));
@@ -377,7 +406,10 @@ void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
         .Raw("IsSolid", &Lua_PixelSpriteIsSolid)
         .Finish();
 
-    LuaBinding::Table(L).RawWithContext("Load", actors, &Lua_PixelSpriteLoad).Finish("Sprite");
+    LuaBinding::Table(L)
+        .RawWithContext("Load", actors, &Lua_PixelSpriteLoad)
+        .RawWithContext("NewSolid", actors, &Lua_PixelSpriteNewSolid)
+        .Finish("Sprite");
 }
 
 // =====================================================================
@@ -417,6 +449,119 @@ void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
         .Finish();
 
     LuaBinding::Table(L).Function<&ActorRegistry::CreateCamera>("new", actors).Finish("Camera2D");
+}
+
+// =====================================================================
+// LightEmitterConfig -- pointer type, owned by ActorRegistry. Same
+// pattern as PlayerActorConfig: attach via RigidBody2D::lightEmitter
+// (LuaBinding::PtrProperty, see RegisterRigidBody2D above), consumed
+// every frame by LightingSystem, never touched by DrawBody itself.
+//
+// type/color/flickerColorShift are hand-written (an enum<->string
+// mapping and 4-scalar RGBA reads/writes, same shape as
+// Lua_CollisionShape2DGetType and Lua_RigidBody2DSetColor respectively
+// -- neither is a mechanical 1:1 Property<> mapping). coneAngleRad/
+// coneDirectionRad cross the Lua boundary in DEGREES via ScaledProperty,
+// same "radians internally, degrees at the boundary" convention
+// RigidBody2D::SetRotation/angularVelocity already use. Everything else
+// is a plain public float/bool, so those stay Property<>.
+// =====================================================================
+
+int Lua_LightEmitterGetType(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    lua_pushstring(L, self->type == LightEmitterConfig::Type::Cone ? "Cone" : "Point");
+    return 1;
+}
+
+int Lua_LightEmitterSetType(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    std::string typeStr = luaL_checkstring(L, 2);
+    self->type = (typeStr == "Cone") ? LightEmitterConfig::Type::Cone : LightEmitterConfig::Type::Point;
+    return 0;
+}
+
+int Lua_LightEmitterGetColor(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    lua_pushnumber(L, self->color.r);
+    lua_pushnumber(L, self->color.g);
+    lua_pushnumber(L, self->color.b);
+    lua_pushnumber(L, self->color.a);
+    return 4;
+}
+
+int Lua_LightEmitterSetColor(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    self->color.r = static_cast<float>(luaL_checknumber(L, 2));
+    self->color.g = static_cast<float>(luaL_checknumber(L, 3));
+    self->color.b = static_cast<float>(luaL_checknumber(L, 4));
+    self->color.a = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+    return 0;
+}
+
+int Lua_LightEmitterGetFlickerColorShift(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    lua_pushnumber(L, self->flickerColorShift.r);
+    lua_pushnumber(L, self->flickerColorShift.g);
+    lua_pushnumber(L, self->flickerColorShift.b);
+    lua_pushnumber(L, self->flickerColorShift.a);
+    return 4;
+}
+
+int Lua_LightEmitterSetFlickerColorShift(lua_State* L) {
+    LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
+    self->flickerColorShift.r = static_cast<float>(luaL_checknumber(L, 2));
+    self->flickerColorShift.g = static_cast<float>(luaL_checknumber(L, 3));
+    self->flickerColorShift.b = static_cast<float>(luaL_checknumber(L, 4));
+    self->flickerColorShift.a = static_cast<float>(luaL_optnumber(L, 5, 0.0));
+    return 0;
+}
+
+void RegisterLightEmitterConfig(lua_State* L, ActorRegistry* actors) {
+    LuaBinding::Class<LightEmitterConfig>(L, LuaBinding::MetatableOf<LightEmitterConfig>::name)
+        .Raw("GetType", &Lua_LightEmitterGetType)
+        .Raw("SetType", &Lua_LightEmitterSetType)
+        .Raw("GetColor", &Lua_LightEmitterGetColor)
+        .Raw("SetColor", &Lua_LightEmitterSetColor)
+        .Raw("GetFlickerColorShift", &Lua_LightEmitterGetFlickerColorShift)
+        .Raw("SetFlickerColorShift", &Lua_LightEmitterSetFlickerColorShift)
+        .Property<&LightEmitterConfig::radius>("GetRadius", "SetRadius")
+        .Property<&LightEmitterConfig::brightness>("GetBrightness", "SetBrightness")
+        .Property<&LightEmitterConfig::falloffExponent>("GetFalloffExponent", "SetFalloffExponent")
+        .ScaledProperty<&LightEmitterConfig::coneAngleRad, kRadToDeg, kDegToRad>("GetConeAngle", "SetConeAngle")
+        .ScaledProperty<&LightEmitterConfig::coneDirectionRad, kRadToDeg, kDegToRad>("GetConeDirection", "SetConeDirection")
+        .Property<&LightEmitterConfig::useOwnerRotation>("GetUseOwnerRotation", "SetUseOwnerRotation")
+        .Property<&LightEmitterConfig::flicker>("IsFlickering", "SetFlicker")
+        .Property<&LightEmitterConfig::flickerSpeed>("GetFlickerSpeed", "SetFlickerSpeed")
+        .Property<&LightEmitterConfig::flickerIntensityAmount>("GetFlickerIntensityAmount", "SetFlickerIntensityAmount")
+        .Finish();
+
+    LuaBinding::Table(L).Function<&ActorRegistry::CreateLightEmitter>("new", actors).Finish("LightEmitterConfig");
+}
+
+// =====================================================================
+// Lighting -- bare global UpdateLighting(deltaTime), not a table
+// function -- same "called once a frame, needs more than one captured
+// context pointer" shape as SyncCamera() above, and the same reasoning:
+// re-resolving anything per-object here instead of once a frame would be
+// wasteful. Needs both a LightingSystem* (to run the pass) and an
+// ActorRegistry* (for LightingSystem::Update to scan), so this bypasses
+// BindFunction/Table::Function the same way Lua_DrawBody/Lua_SyncCamera
+// already do, and pushes both closures by hand.
+// =====================================================================
+
+int Lua_UpdateLighting(lua_State* L) {
+    float dt = static_cast<float>(luaL_checknumber(L, 1));
+    auto* lighting = static_cast<LightingSystem*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(2)));
+    if (lighting && actors) lighting->Update(*actors, dt);
+    return 0;
+}
+
+void RegisterLighting(lua_State* L, LightingSystem* lighting, ActorRegistry* actors) {
+    lua_pushlightuserdata(L, lighting);
+    lua_pushlightuserdata(L, actors);
+    lua_pushcclosure(L, &Lua_UpdateLighting, 2);
+    lua_setglobal(L, "UpdateLighting");
 }
 
 // =====================================================================
@@ -555,6 +700,9 @@ void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors)
     lua_pushlightuserdata(L, actors);
     lua_pushcclosure(L, &Lua_SyncCamera, 2);
     lua_setglobal(L, "SyncCamera");
+
+    LuaBinding::BindFunction<&Renderer2D::SetPixelScale>(L, "SetPixelScale", renderer);
+    LuaBinding::BindFunction<&Renderer2D::GetPixelScale>(L, "GetPixelScale", renderer);
 }
 
 // =====================================================================
@@ -670,6 +818,8 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterCollisionShape2D(L, context.actors);
     RegisterPlayerActorConfig(L, context.actors);
     RegisterCamera2D(L, context.actors);
+    RegisterLightEmitterConfig(L, context.actors);
+    RegisterLighting(L, context.lighting, context.actors);
     RegisterActorRegistry(L, context.actors);
     RegisterInput(L, context.input);
     RegisterPhysics(L);

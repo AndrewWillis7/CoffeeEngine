@@ -6,18 +6,27 @@ local Prop = Class()
 ---@param y number
 ---@param w number
 ---@param h number
----@param spritePath string|nil PNG path -- if given, replaces the flat-color quad with this texture
-function Prop.new(x, y, w, h, spritePath)
+---@param spritePath string|nil PNG path -- if given, replaces the generated solid-color sprite with this texture
+---@param r number|nil Fill color if no spritePath given. Defaults to 1
+---@param g number|nil Fill color if no spritePath given. Defaults to 1
+---@param b number|nil Fill color if no spritePath given. Defaults to 1
+---@param a number|nil Fill color if no spritePath given. Defaults to 1
+function Prop.new(x, y, w, h, spritePath, r, g, b, a)
     local self = setmetatable({}, Prop)
 
     self.body = RigidBody2D.new(x, y, w, h)
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
     self.body:SetMass(1)
 
+    -- Every Prop is pixel-addressable now, not just PNG-backed ones --
+    -- with no spritePath given, this generates a solid-fill sprite
+    -- instead of falling back to a flat-color quad (see Sprite.NewSolid).
     if spritePath then
         self.sprite = Sprite.Load(spritePath)
-        self.body:SetSprite(self.sprite)
+    else
+        self.sprite = Sprite.NewSolid(w, h, r or 1.0, g or 1.0, b or 1.0, a or 1.0)
     end
+    self.body:SetSprite(self.sprite)
 
     return self
 end

@@ -14,7 +14,15 @@ function StaticBody.new(x, y, w, h, r, g, b, a)
     local self = setmetatable({}, StaticBody)
 
     self.body = RigidBody2D.new(x, y, w, h)
-    self.body:SetColor(r or 1.0, g or 1.0, b or 1.0, a or 1.0)
+
+    -- Solid-fill generated sprite instead of a flat-color quad -- every
+    -- basic square is pixel-addressable (SetPixel/PunchCircle/lighting)
+    -- by default now, not just PNG-backed props. SetSprite also sizes
+    -- the body to the sprite's native pixel size, which is exactly w x h
+    -- here, so this is a no-op on top of RigidBody2D.new(x, y, w, h).
+    self.sprite = Sprite.NewSolid(w, h, r or 1.0, g or 1.0, b or 1.0, a or 1.0)
+    self.body:SetSprite(self.sprite)
+
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
     self.body:SetMass(0)
 

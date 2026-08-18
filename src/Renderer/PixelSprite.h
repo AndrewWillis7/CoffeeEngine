@@ -12,6 +12,15 @@ public:
     // should stay crisp, not bleed into neighboring pixels.
     explicit PixelSprite(const std::string& filepath, Texture::Filter filter = Texture::Filter::Nearest);
 
+    // Builds a blank, in-memory sprite filled solid with `fill` -- no PNG
+    // involved. This is the "split a basic flat-color square into
+    // individual pixels" primitive: ActorRegistry::CreateSolidSprite (see
+    // its header comment) calls this once per body so every plain
+    // RigidBody2D quad becomes something SetPixel/PunchCircle/lighting can
+    // actually address a pixel at a time, the same way a loaded PNG
+    // already could.
+    PixelSprite(int width, int height, const Color& fill, Texture::Filter filter = Texture::Filter::Nearest);
+
     PixelSprite(const PixelSprite&) = delete;
     PixelSprite& operator=(const PixelSprite&) = delete;
 
@@ -34,6 +43,43 @@ public:
     // were ever restored.
     void PunchCircle(int cx, int cy, float radius);
 
+    // =====================================================================
+    // Lighting overlay -- LightingSystem-only (not exposed to Lua). Every
+    // pixel this class holds actually lives in TWO buffers: m_Pixels is
+    // the authored "base" truth that SetPixel/GetPixel/IsSolid/PunchCircle
+    // above all read and write, exactly as before lighting existed at all.
+    // m_LitPixels mirrors it but with each frame's lighting tint mixed in
+    // on top -- it's what Flush() actually uploads to the GPU. Splitting
+    // these apart means lighting can recolor what's ON SCREEN every single
+    // frame (never baked, never destructive) without corrupting the
+    // pixel data any gameplay/destruction code actually queries.
+    //
+    // Both are seeded equal (lit == base) by both constructors and kept in
+    // sync by SetPixel/PunchCircle, so a sprite nothing ever lights still
+    // displays its authored colors exactly as before -- lighting is purely
+    // additive on top, never a prerequisite for correct rendering.
+    // =====================================================================
+
+    // Copies base -> lit for every pixel in [minX,minY]..[maxX,maxY]
+    // (inclusive, clamped to bounds), discarding whatever tint was mixed
+    // in there before. LightingSystem calls this once per frame, on
+    // whatever rect ITS OWN bookkeeping says was lit last frame, before
+    // re-accumulating this frame's lights -- so a torch that moved (or
+    // was removed) cleanly erases its own glow instead of leaving a
+    // stale tinted patch behind.
+    void ResetLightingRect(int minX, int minY, int maxX, int maxY);
+
+    // Adds `tint * strength` on top of whatever's currently in the lit
+    // buffer at (x, y), clamped to 1.0 per channel (blown-out/white-hot
+    // at brightest, never wraps). No-op on a non-solid (fully transparent
+    // -- punched out, or simply never drawn) pixel; alpha itself is never
+    // touched, so lighting can never change what's solid. Call
+    // ResetLightingRect on this pixel's rect first if you want a clean
+    // "starting from base" accumulation -- this call always ADDS to
+    // whatever's already there, which is what lets several overlapping
+    // lights stack naturally within one frame.
+    void AccumulateLightTint(int x, int y, const Color& tint, float strength);
+
     // Uploads whatever's changed since the last Flush() as one
     // glTexSubImage2D over the accumulated dirty rect. Called automatically
     // by DrawBody() right before it draws a sprite-backed body, so scripts
@@ -48,7 +94,8 @@ private:
     void MarkDirty(int x, int y, int w, int h);
 
     int m_Width = 0, m_Height = 0;
-    std::vector<unsigned char> m_Pixels; // RGBA8, row-major, m_Width texels wide
+    std::vector<unsigned char> m_Pixels;    // RGBA8, row-major -- authored BASE truth
+    std::vector<unsigned char> m_LitPixels; // RGBA8, row-major -- base + this-frame's lighting tint; what Flush() uploads
     std::unique_ptr<Texture> m_Texture; // GPU mirror; null if PNG failed to load
 
     bool m_Dirty = false;

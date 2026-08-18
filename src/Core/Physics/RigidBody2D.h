@@ -8,6 +8,7 @@
 class Shader;
 class PlayerActorConfig;
 class PixelSprite;
+class LightEmitterConfig;
 
 // Minimal liner-motion body: velocity + accumulated force, integrated with
 // semi-implicit Euler. No collision response (for now...) -- collisionShape
@@ -40,6 +41,25 @@ public:
     // body's texture instead of a flat color quad, flushing any pending
     // SetPixel/PunchCircle edits first.
     PixelSprite* sprite = nullptr;
+
+    // Non-owning, same lifetime convention as the pointers above. When
+    // set, this body IS a dynamic light source -- LightingSystem::Update()
+    // (see Core/Gameplay/LightingSystem.h) finds it every frame the same
+    // way ActorRegistry::GetPlayerActor() finds playerConfig, and radially
+    // tints nearby sprite-backed bodies' solid pixels according to
+    // whatever's configured on it.
+    LightEmitterConfig* lightEmitter = nullptr;
+
+    // Plain bool, not a pointer-tag like the above -- there's no per-
+    // instance configuration yet (see LightEmitterConfig.h's header
+    // comment for why light_emissive IS a config object and this isn't).
+    // When true, LightingSystem's raymarch stops dead at this body's
+    // first solid pixel along a given light ray instead of passing
+    // through it -- border walls, terrain, anything meant to cast a hard
+    // shadow. A body can be both lightBlocking AND have a sprite/
+    // lightEmitter of its own; blocking only affects OTHER lights' rays
+    // passing through this body, never its own glow.
+    bool lightBlocking = false;
 
     Vector2 velocity;
     float mass = 1.0f;

@@ -5,6 +5,7 @@
 #include "Core/ActorRegistry.h"
 #include "Core/Input/UserInputService.h"
 #include "Core/Gameplay/UI/EngineUIController.h"
+#include "Core/Gameplay/LightingSystem.h"
 #include "Renderer/Renderer2D.h"
 #include <chrono>
 #include <iostream>
@@ -37,6 +38,8 @@ int main() {
     // Polling-style keyboard/mouse state, fed by the same window event callback below
     UserInputService inputService;
 
+    LightingSystem lightingSystem;
+
     // Script Stuff
     EngineContext engineContext;
     engineContext.graphics = graphicsContext.get();
@@ -44,6 +47,7 @@ int main() {
     engineContext.renderer = &renderer2D;
     engineContext.actors = &actorRegistry;
     engineContext.input = &inputService;
+    engineContext.lighting = &lightingSystem;
 
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);

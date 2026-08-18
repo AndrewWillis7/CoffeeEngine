@@ -3,6 +3,7 @@
 #include "Physics/CollisionShape2D.h"
 #include "Gameplay/PlayerActorConfig.h"
 #include "Gameplay/Camera2D.h"
+#include "Gameplay/LightEmitterConfig.h"
 #include "Math/Transform2D.h"
 #include "Renderer/Shader.h"
 #include "Renderer/ShaderLibrary.h"
@@ -186,6 +187,22 @@ PixelSprite* ActorRegistry::GetOrLoadPixelSprite(const std::string& filepath) {
     return raw;
 }
 
+PixelSprite* ActorRegistry::CreateSolidSprite(int width, int height, float r, float g, float b, float a) {
+    auto sprite = std::make_unique<PixelSprite>(width, height, Color(r, g, b, a));
+    if (!sprite->IsValid()) return nullptr; // PixelSprite's own constructor already logged why
+
+    PixelSprite* raw = sprite.get();
+    m_GeneratedSprites.push_back(std::move(sprite));
+    return raw;
+}
+
+LightEmitterConfig* ActorRegistry::CreateLightEmitter() {
+    auto config = std::make_unique<LightEmitterConfig>();
+    LightEmitterConfig* raw = config.get();
+    m_LightEmitters.push_back(std::move(config));
+    return raw;
+}
+
 void ActorRegistry::DumpTree() const {
     std::cout << "ActorRegistry (" << m_Bodies.size() << " bodies)\n";
     for (const auto& body : m_Bodies) {
@@ -212,6 +229,13 @@ void ActorRegistry::DumpTree() const {
         } else {
             std::cout << "    - Camera2D: none\n";
         }
+        if (body->lightEmitter) {
+            std::cout << "    - LightEmitterConfig: attached (radius=" << body->lightEmitter->radius
+                       << " brightness=" << body->lightEmitter->brightness << ")\n";
+        } else {
+            std::cout << "    - LightEmitterConfig: none\n";
+        }
+        std::cout << "    - lightBlocking: " << (body->lightBlocking ? "true" : "false") << "\n";
     }
 }
 
@@ -229,7 +253,9 @@ std::vector<std::string> ActorRegistry::GetDebugLines() const {
         std::ostringstream flags;
         flags << "  " << (body->shader ? "[Shd]" : "") 
               << (body->collisionShape ? (body->collisionShape->GetType() == CollisionShape2D::Type::Box ? "[Box]" : "[Circ]") : "")
-              << (body->playerConfig ? "[Ply]" : "");
+              << (body->playerConfig ? "[Ply]" : "")
+              << (body->lightEmitter ? "[Lit]" : "")
+              << (body->lightBlocking ? "[Blk]" : "");
         lines.push_back(flags.str());
     }
 
@@ -245,5 +271,7 @@ void ActorRegistry::Clear() {
     m_CollisionShapes.clear();
     m_PlayerConfigs.clear();
     m_Cameras.clear();
-    // m_NamedShaders intentionally NOT cleared -- see header comment.
+    m_LightEmitters.clear();
+    m_GeneratedSprites.clear();
+    // m_NamedShaders/m_PixelSprites intentionally NOT cleared -- see header comments.
 }

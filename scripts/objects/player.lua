@@ -21,7 +21,13 @@ function Player.new(x, y, w, h)
     local self = setmetatable({}, Player)
 
     self.body = RigidBody2D.new(x, y, w, h)
-    self.body:SetColor(1.0, 1.0, 1.0, 1.0)
+
+    -- Solid white generated sprite instead of a flat-color quad -- makes
+    -- the player pixel-addressable too, so lighting (a torch flickering
+    -- across the player as they walk by) actually shows up on them.
+    self.sprite = Sprite.NewSolid(w, h, 1.0, 1.0, 1.0, 1.0)
+    self.body:SetSprite(self.sprite)
+
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
 
     self.config = PlayerActorConfig.new()

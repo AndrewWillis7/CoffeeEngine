@@ -111,6 +111,10 @@ void Renderer2D::EnsureViewport(ViewportMode mode) {
     }
 }
 
+void Renderer2D::SetPixelScale(float scale) {
+    m_PixelScale = scale > 0.0f ? scale : 1.0f;
+}
+
 void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewportSize,
                                   const Vector2& targetAspect, Shader* borderShader,
                                   Texture* borderTexture) {
@@ -135,7 +139,7 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
     Vector2 aspectBasis = hasTargetAspect ? targetAspect : m_CameraViewport;
 
     FitRect outer = FitAspect(m_Width, m_Height, aspectBasis.x, aspectBasis.y);
-    FitRect inner = FitAspect(outer.w, outer.h, m_CameraViewport.x, m_CameraViewport.y);
+    FitRect inner = FitAspect(outer.w, outer.h, m_CameraViewport.x * m_PixelScale, m_CameraViewport.y * m_PixelScale);
 
     m_ContentX = outer.x + inner.x;
     m_ContentY = outer.y + inner.y;
@@ -165,6 +169,23 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
         }
     }
 
+    // How many real screen pixels currently correspond to one
+    // native/virtual pixel -- lets a procedural border shader (see
+    // border.frag) quantize itself onto the SAME pixel grid the rest
+    // of the game's pixel art renders at, regardless of the real
+    // window's size. inner.w/m_CameraViewport.x and
+    // inner.h/m_CameraViewport.y are equal (FitAspect only ever
+    // applies a single uniform scale, never a non-uniform stretch),
+    // so either axis works here; x is used for a single scalar.
+    // Also folds in m_PixelScale (see SetPixelScale's header comment)
+    // so the border's own grid stays visually matched to however
+    // chunky the rest of the world currently is -- without this, the
+    // border's stars/clouds would keep rendering at the OLD
+    // (PixelScale == 1) grain even after a script chunks up every
+    // actor via SetPixelScale(), which would look inconsistent.
+    float pixelScale = (m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f) * m_PixelScale;
+    borderShader->SetFloat("u_PixelScale", pixelScale);
+
     EnsureViewport(ViewportMode::Content);
 }
 
@@ -187,7 +208,16 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
         viewport = m_CameraViewport;
     }
 
-    shader.SetVec2("u_Resolution", m_Width, m_Height);
+    // Global chunky-pixel-art scale -- WORLD-space draws only (every
+    // actor), never screen-space (the debug UI stays crisp regardless).
+    // Shrinking the effective viewport packs the same real-pixel content
+    // rect with fewer world units, which makes each one draw bigger --
+    // see SetPixelScale()'s header comment for the full reasoning. A
+    // no-op at the default of 1.0.
+    if (world && m_PixelScale != 1.0f) {
+        viewport = viewport / m_PixelScale;
+    }
+
     shader.SetFloat("u_Time", m_Time);
     shader.SetVec2("u_Position", transform.position.x, transform.position.y);
     shader.SetVec2("u_Size", size.x, size.y);
