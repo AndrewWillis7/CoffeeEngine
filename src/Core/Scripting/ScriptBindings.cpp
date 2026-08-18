@@ -536,6 +536,7 @@ void RegisterLightEmitterConfig(lua_State* L, ActorRegistry* actors) {
         .Property<&LightEmitterConfig::flicker>("IsFlickering", "SetFlicker")
         .Property<&LightEmitterConfig::flickerSpeed>("GetFlickerSpeed", "SetFlickerSpeed")
         .Property<&LightEmitterConfig::flickerIntensityAmount>("GetFlickerIntensityAmount", "SetFlickerIntensityAmount")
+        .Property<&LightEmitterConfig::toneSteps>("GetToneSteps", "SetToneSteps")
         .Finish();
 
     LuaBinding::Table(L).Function<&ActorRegistry::CreateLightEmitter>("new", actors).Finish("LightEmitterConfig");

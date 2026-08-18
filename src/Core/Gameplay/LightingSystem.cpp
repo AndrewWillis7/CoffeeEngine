@@ -11,27 +11,15 @@
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
-// Ray-march tuning -- see LightingSystem.h's PERFORMANCE NOTE. Both are
-// plain constants for now rather than LightEmitterConfig fields: they're
-// about HOW the system samples the world, not what any one light looks
-// like, so a single engine-wide value is the right knob until profiling
-// says otherwise.
-//
-// kStepPixels is a texel count, not a fraction -- so it needs to track
-// how fine-grained the content actually is. At 2.0 it only samples ~8
-// columns across a 16-texel-wide sprite per ray, which reads as visibly
-// gappy/stair-stepped lighting on something that small (it was fine
-// against the old 50-texel-wide placeholder player). 1.0 keeps every
-// texel column reachable by at least one ray without doubling the
-// engine's actual bottleneck (candidate-body count, still O(n) with no
-// broad-phase index) -- see the "on the horizon" list.
-constexpr float kStepPixels = 1.0f;          // world-pixel distance advanced per ray-march step
-constexpr float kRayDegreesPerSample = 2.0f; // target angular resolution
-constexpr int kMinRays = 12;
-constexpr int kMaxRays = 220; // caps a full 360-degree Point light at ~1.6 deg resolution
+// Occlusion-march tuning. This is now the ONLY thing that steps through
+// world space piece by piece -- see LightingSystem.h's header comment
+// for why "which pixels get lit" is no longer a ray sweep. It only needs
+// to be fine enough that a thin wall can't be stepped clean over; unlike
+// the old kStepPixels, it no longer has anything to do with how gapless
+// the lighting itself looks.
+constexpr float kOcclusionStepPixels = 1.0f;
 
 // Inverse of the vertex shader's local->world quad transform (see
 // scripts/shaders/quad.vert and Renderer2D::ApplyCommonUniforms) -- maps
@@ -55,6 +43,26 @@ bool WorldToPixel(const RigidBody2D& body, const Vector2& worldPoint, int& outX,
     outY = static_cast<int>(std::floor(py));
 
     return outX >= 0 && outY >= 0 && outX < body.sprite->GetWidth() && outY < body.sprite->GetHeight();
+}
+
+// Exact inverse of WorldToPixel above -- given a pixel INDEX, returns
+// that texel's CENTER in world space (the (px+0.5, py+0.5) mirrors
+// WorldToPixel's floor(), so a world point that WorldToPixel maps to
+// (px, py) sits within half a texel of what this returns for the same
+// (px, py) -- close enough that distance/angle-to-light math on the
+// result reads as "this pixel's position", not an edge or a corner).
+// Every candidate-pixel lighting evaluation below is driven from THIS,
+// not from a ray sample -- see LightingSystem.h's header comment.
+Vector2 PixelToWorld(const RigidBody2D& body, int px, int py) {
+    float sx = body.transform.scale.x != 0.0f ? body.transform.scale.x : 1.0f;
+    float sy = body.transform.scale.y != 0.0f ? body.transform.scale.y : 1.0f;
+
+    float localX = (static_cast<float>(px) + 0.5f) - body.size.x * 0.5f;
+    float localY = (static_cast<float>(py) + 0.5f) - body.size.y * 0.5f;
+
+    Vector2 local(localX * sx, localY * sy);       // redo the body's scale
+    Vector2 rotated = local.Rotated(body.transform.rotation); // redo the body's rotation
+    return body.transform.position + rotated;
 }
 
 // Conservative world-space AABB for a sprite-backed body's VISUAL extent
@@ -88,10 +96,58 @@ float FlickerFactor(float time, float speed, float seed) {
     return std::clamp(wobble, -1.0f, 1.0f);
 }
 
+// Normalizes a degree difference into (-180, 180] -- how far `angleDeg`
+// sits from `centerDeg`, signed, shortest way around the circle.
+float AngleDiffDeg(float angleDeg, float centerDeg) {
+    float diff = angleDeg - centerDeg;
+    while (diff > 180.0f) diff -= 360.0f;
+    while (diff <= -180.0f) diff += 360.0f;
+    return diff;
+}
+
 struct LightSample {
     RigidBody2D* body = nullptr;
     LightEmitterConfig* config = nullptr;
 };
+
+// True if some lightBlocking body's solid pixel sits strictly between
+// `from` (a light's world position) and `to` (a candidate pixel's world
+// position). `skipBody` is the LIGHT's own owning body -- excluded so a
+// body that both emits AND blocks (a lit lantern that's also solid,
+// say) never shadows its own glow, per RigidBody2D::lightBlocking's own
+// header comment ("blocking only affects OTHER lights' rays passing
+// through this body, never its own glow").
+//
+// Deliberately NOT the target pixel's own body: a solid, blocking body
+// SHOULD be able to shadow its own far side from an external light on
+// its near side (e.g. campfire light hitting one face of the wall
+// should not shine through the wall's own 16-texel bulk to light the
+// opposite face) -- that's the actual point of marking something
+// lightBlocking. Only the destination pixel's own immediate texel is
+// protected from self-occlusion, via marchLimit below stopping the
+// march a step short of `to`.
+bool IsOccluded(const Vector2& from, const Vector2& to, const RigidBody2D* skipBody,
+                 const std::vector<RigidBody2D*>& blockers) {
+    if (blockers.empty()) return false;
+
+    Vector2 delta = to - from;
+    float dist = delta.Length();
+    if (dist <= kOcclusionStepPixels) return false; // essentially at the light itself
+
+    Vector2 dir = delta / dist;
+    float marchLimit = dist - kOcclusionStepPixels;
+
+    for (float traveled = kOcclusionStepPixels; traveled < marchLimit; traveled += kOcclusionStepPixels) {
+        Vector2 sample = from + dir * traveled;
+        for (RigidBody2D* blocker : blockers) {
+            if (blocker == skipBody) continue;
+            int px, py;
+            if (!WorldToPixel(*blocker, sample, px, py)) continue;
+            if (blocker->sprite->IsSolid(px, py)) return true;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -120,17 +176,27 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
         return;
     }
 
+    // Gathered once per Update() call, not once per light -- which
+    // bodies cast shadows doesn't depend on which light is asking, same
+    // "collect once, reuse" spirit as each light's own candidate scan.
+    std::vector<RigidBody2D*> blockers;
+    for (const auto& bodyPtr : bodies) {
+        RigidBody2D* body = bodyPtr.get();
+        if (body->sprite && body->lightBlocking) blockers.push_back(body);
+    }
+
     std::vector<LitRect> newLitRects;
 
-    // Pass 2: cast every light.
+    // Pass 2: light every candidate pixel of every candidate body, for
+    // every light.
     for (const LightSample& light : lights) {
         RigidBody2D* lightBody = light.body;
         LightEmitterConfig* cfg = light.config;
         if (cfg->radius <= 0.0f) continue;
 
         // Per-light flicker sample for this frame -- computed once, not
-        // per-ray/per-pixel, so one frame's lit region never has a seam
-        // from its own flicker (see LightEmitterConfig.h).
+        // per-pixel, so one frame's lit region never has a seam from its
+        // own flicker (see LightEmitterConfig.h).
         float seed = static_cast<float>(reinterpret_cast<uintptr_t>(cfg) % 10007) / 10007.0f;
         float flicker = cfg->flicker ? FlickerFactor(m_Time, cfg->flickerSpeed, seed) : 0.0f;
         float brightness = std::max(0.0f, cfg->brightness * (1.0f + flicker * cfg->flickerIntensityAmount));
@@ -147,7 +213,7 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
         Vector2 lightPos = lightBody->transform.position;
 
         // Broad-phase: which sprite-backed bodies are even worth
-        // ray-testing for this light -- see the PERFORMANCE NOTE in
+        // per-pixel testing for this light -- see the PERFORMANCE NOTE in
         // LightingSystem.h.
         std::vector<RigidBody2D*> candidates;
         for (const auto& bodyPtr : bodies) {
@@ -160,92 +226,84 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
         }
         if (candidates.empty()) continue;
 
-        // Angle range to sweep this light across: a full circle for
-        // Point, a centered arc for Cone. coneDirectionRad is optionally
-        // relative to the owning body's own rotation (see
-        // LightEmitterConfig::useOwnerRotation).
+        // Cone-only aim: center direction in degrees, optionally riding
+        // the owning body's own rotation (see LightEmitterConfig::
+        // useOwnerRotation), and the full angular width of the wedge.
         bool isCone = cfg->type == LightEmitterConfig::Type::Cone;
-        float startDeg, sweepDeg;
+        float dirDeg = 0.0f, sweepDeg = 360.0f;
         if (isCone) {
-            float dirDeg = cfg->coneDirectionRad * kRadToDeg;
+            dirDeg = cfg->coneDirectionRad * kRadToDeg;
             if (cfg->useOwnerRotation) dirDeg += lightBody->transform.rotation * kRadToDeg;
             sweepDeg = std::max(0.0f, cfg->coneAngleRad * kRadToDeg);
-            startDeg = dirDeg - sweepDeg * 0.5f;
-        } else {
-            startDeg = 0.0f;
-            sweepDeg = 360.0f;
         }
         if (sweepDeg <= 0.0f) continue;
-
-        int rayCount = std::clamp(static_cast<int>(sweepDeg / kRayDegreesPerSample), kMinRays, kMaxRays);
-        // Cone rays cover BOTH edges inclusive (a sharp, visible cone
-        // boundary); a full-circle Point sweep must NOT double-cover the
-        // 0/360 seam, so it steps by sweepDeg/rayCount instead.
-        float angleStep = (isCone && rayCount > 1) ? sweepDeg / static_cast<float>(rayCount - 1)
-                                                     : sweepDeg / static_cast<float>(rayCount);
+        float halfAngleDeg = sweepDeg * 0.5f;
 
         // Per-light accumulation of "which body, what pixel rect did THIS
-        // light touch" -- flushed into newLitRects once this light's
-        // rays are all done.
+        // light touch" -- flushed into newLitRects once this light is done.
         std::unordered_map<RigidBody2D*, LitRect> touched;
 
-        for (int i = 0; i < rayCount; ++i) {
-            float angleDeg = startDeg + angleStep * static_cast<float>(i);
+        for (RigidBody2D* candidate : candidates) {
+            PixelSprite* sprite = candidate->sprite;
+            int w = sprite->GetWidth();
+            int h = sprite->GetHeight();
 
-            // Soft cone edge: full strength across the inner 80% of the
-            // arc, smoothly fading to zero at the boundary, so a
-            // spotlight doesn't have a razor-sharp cutoff. No-op (always
-            // 1.0) for Point lights.
-            float angularFactor = 1.0f;
-            if (isCone) {
-                float distFromCenterDeg = std::abs(angleDeg - (startDeg + sweepDeg * 0.5f));
-                float halfAngle = sweepDeg * 0.5f;
-                angularFactor = 1.0f - Smoothstep01(halfAngle * 0.8f, halfAngle, distFromCenterDeg);
-            }
-            if (angularFactor <= 0.0f) continue;
+            for (int py = 0; py < h; ++py) {
+                for (int px = 0; px < w; ++px) {
+                    if (!sprite->IsSolid(px, py)) continue;
 
-            float angleRad = angleDeg * kDegToRad;
-            Vector2 dir(std::cos(angleRad), std::sin(angleRad));
+                    Vector2 worldPos = PixelToWorld(*candidate, px, py);
+                    float dist = Vector2::Distance(lightPos, worldPos);
+                    if (dist > cfg->radius) continue;
 
-            for (float traveled = 0.0f; traveled <= cfg->radius; traveled += kStepPixels) {
-                Vector2 sample = lightPos + dir * traveled;
-
-                RigidBody2D* hitBody = nullptr;
-                int hitX = 0, hitY = 0;
-                bool hitBlocks = false;
-
-                // First solid hit wins -- the engine has no z-order/
-                // layering concept yet (bodies just draw in whatever
-                // order Draw() calls happen), so with overlapping sprites
-                // this is an arbitrary-but-stable pick, not a "nearest to
-                // camera" one. Flagged as a known simplification.
-                for (RigidBody2D* candidate : candidates) {
-                    int px, py;
-                    if (!WorldToPixel(*candidate, sample, px, py)) continue;
-                    if (!candidate->sprite->IsSolid(px, py)) continue;
-                    hitBody = candidate;
-                    hitX = px; hitY = py;
-                    hitBlocks = candidate->lightBlocking;
-                    break;
-                }
-
-                if (hitBody) {
-                    float falloffT = std::clamp(traveled / cfg->radius, 0.0f, 1.0f);
-                    float strength = brightness * angularFactor * std::pow(1.0f - falloffT, cfg->falloffExponent);
-                    if (strength > 0.0f) {
-                        hitBody->sprite->AccumulateLightTint(hitX, hitY, color, strength);
-
-                        auto it = touched.find(hitBody);
-                        if (it == touched.end()) {
-                            touched[hitBody] = LitRect{hitBody, hitX, hitY, hitX, hitY};
-                        } else {
-                            it->second.minX = std::min(it->second.minX, hitX);
-                            it->second.minY = std::min(it->second.minY, hitY);
-                            it->second.maxX = std::max(it->second.maxX, hitX);
-                            it->second.maxY = std::max(it->second.maxY, hitY);
+                    // Soft cone edge: full strength across the inner 80%
+                    // of the arc, smoothly fading to zero at the
+                    // boundary, so a spotlight doesn't have a razor-sharp
+                    // cutoff. No-op (always 1.0) for Point lights.
+                    float angularFactor = 1.0f;
+                    if (isCone) {
+                        Vector2 toPixel = worldPos - lightPos;
+                        if (toPixel.LengthSquared() > 0.0001f) {
+                            float angleDeg = std::atan2(toPixel.y, toPixel.x) * kRadToDeg;
+                            float distFromCenterDeg = std::abs(AngleDiffDeg(angleDeg, dirDeg));
+                            if (distFromCenterDeg > halfAngleDeg) continue; // outside the wedge entirely
+                            angularFactor = 1.0f - Smoothstep01(halfAngleDeg * 0.8f, halfAngleDeg, distFromCenterDeg);
                         }
+                        // else: pixel sits right on top of the light's
+                        // own position -- direction is undefined, treat
+                        // as dead-center (angularFactor stays 1.0).
                     }
-                    if (hitBlocks) break; // opaque -- ray stops here, casts a shadow behind it
+                    if (angularFactor <= 0.0f) continue;
+
+                    // Shadow test -- see IsOccluded's comment. Only now,
+                    // after the cheap distance/angle checks above already
+                    // ruled most pixels out, because this is the
+                    // expensive part.
+                    if (IsOccluded(lightPos, worldPos, lightBody, blockers)) continue;
+
+                    float falloffT = std::clamp(dist / cfg->radius, 0.0f, 1.0f);
+                    if (cfg->toneSteps > 0) {
+                        // Round DOWN to the nearest 1/toneSteps -- turns
+                        // the smooth gradient into toneSteps flat
+                        // concentric rings instead. See
+                        // LightEmitterConfig::toneSteps's comment.
+                        float steps = static_cast<float>(cfg->toneSteps);
+                        falloffT = std::floor(falloffT * steps) / steps;
+                    }
+                    float strength = brightness * angularFactor * std::pow(1.0f - falloffT, cfg->falloffExponent);
+                    if (strength <= 0.0f) continue;
+
+                    sprite->AccumulateLightTint(px, py, color, strength);
+
+                    auto it = touched.find(candidate);
+                    if (it == touched.end()) {
+                        touched[candidate] = LitRect{candidate, px, py, px, py};
+                    } else {
+                        it->second.minX = std::min(it->second.minX, px);
+                        it->second.minY = std::min(it->second.minY, py);
+                        it->second.maxX = std::max(it->second.maxX, px);
+                        it->second.maxY = std::max(it->second.maxY, py);
+                    }
                 }
             }
         }

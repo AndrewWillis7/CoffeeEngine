@@ -45,39 +45,64 @@ public:
 
     // =====================================================================
     // Lighting overlay -- LightingSystem-only (not exposed to Lua). Every
-    // pixel this class holds actually lives in TWO buffers: m_Pixels is
-    // the authored "base" truth that SetPixel/GetPixel/IsSolid/PunchCircle
-    // above all read and write, exactly as before lighting existed at all.
-    // m_LitPixels mirrors it but with each frame's lighting tint mixed in
-    // on top -- it's what Flush() actually uploads to the GPU. Splitting
-    // these apart means lighting can recolor what's ON SCREEN every single
-    // frame (never baked, never destructive) without corrupting the
-    // pixel data any gameplay/destruction code actually queries.
+    // pixel this class holds actually lives in TWO color buffers: m_Pixels
+    // is the authored "base" truth that SetPixel/GetPixel/IsSolid/
+    // PunchCircle above all read and write, exactly as before lighting
+    // existed at all. m_LitPixels mirrors it but with each frame's
+    // lighting mixed in on top -- it's what Flush() actually uploads to
+    // the GPU. Splitting these apart means lighting can recolor what's ON
+    // SCREEN every single frame (never baked, never destructive) without
+    // corrupting the pixel data any gameplay/destruction code actually
+    // queries.
     //
-    // Both are seeded equal (lit == base) by both constructors and kept in
-    // sync by SetPixel/PunchCircle, so a sprite nothing ever lights still
-    // displays its authored colors exactly as before -- lighting is purely
-    // additive on top, never a prerequisite for correct rendering.
+    // A third pair of buffers -- m_LightAccumColor/m_LightAccumWeight,
+    // float per pixel, NOT the GPU-facing RGBA8 the other two use -- holds
+    // this frame's raw, not-yet-resolved light contributions:
+    // m_LightAccumColor is a running SUM of `tint * strength` from every
+    // light that's touched this pixel so far this frame, and
+    // m_LightAccumWeight is the running sum of `strength` alone. Together
+    // they're everything needed to turn N overlapping lights' colors into
+    // one MIX rather than a wash: see AccumulateLightTint's comment below
+    // for the actual blend math.
+    //
+    // All four are seeded/cleared equal (lit == base, accum == 0) by both
+    // constructors and ResetLightingRect, so a sprite nothing ever lights
+    // still displays its authored colors exactly as before -- lighting is
+    // purely an overlay, never a prerequisite for correct rendering.
     // =====================================================================
 
-    // Copies base -> lit for every pixel in [minX,minY]..[maxX,maxY]
-    // (inclusive, clamped to bounds), discarding whatever tint was mixed
-    // in there before. LightingSystem calls this once per frame, on
-    // whatever rect ITS OWN bookkeeping says was lit last frame, before
-    // re-accumulating this frame's lights -- so a torch that moved (or
-    // was removed) cleanly erases its own glow instead of leaving a
-    // stale tinted patch behind.
+    // Copies base -> lit AND zeroes the accumulation buffers for every
+    // pixel in [minX,minY]..[maxX,maxY] (inclusive, clamped to bounds),
+    // discarding whatever this rect mixed in last frame. LightingSystem
+    // calls this once per frame, on whatever rect ITS OWN bookkeeping says
+    // was lit last frame, before re-accumulating this frame's lights -- so
+    // a torch that moved (or was removed) cleanly erases its own glow
+    // instead of leaving a stale tinted patch (or a stale weight that
+    // would bias the next mix) behind.
     void ResetLightingRect(int minX, int minY, int maxX, int maxY);
 
-    // Adds `tint * strength` on top of whatever's currently in the lit
-    // buffer at (x, y), clamped to 1.0 per channel (blown-out/white-hot
-    // at brightest, never wraps). No-op on a non-solid (fully transparent
-    // -- punched out, or simply never drawn) pixel; alpha itself is never
-    // touched, so lighting can never change what's solid. Call
-    // ResetLightingRect on this pixel's rect first if you want a clean
-    // "starting from base" accumulation -- this call always ADDS to
-    // whatever's already there, which is what lets several overlapping
-    // lights stack naturally within one frame.
+    // Folds one light's contribution into pixel (x, y)'s running mix and
+    // immediately re-resolves m_LitPixels there, so the lit buffer is
+    // always valid to display/upload even mid-accumulation. No-op on a
+    // non-solid (fully transparent -- punched out, or simply never drawn)
+    // pixel; alpha itself is never touched, so lighting can never change
+    // what's solid.
+    //
+    // This is a genuine MIX, not an add-and-clamp: `tint * strength` is
+    // folded into a running weighted-average light color (accumColor /
+    // accumWeight), and the pixel's own base color is blended toward that
+    // average by `saturate(accumWeight)` -- so a pixel barely grazed by
+    // one weak light stays close to its base color, a pixel sitting in
+    // one light's hotspot (weight >= 1) reads as that light's color
+    // outright rather than blowing out toward white, and a pixel touched
+    // by TWO differently-colored lights (say, a warm campfire and a cool
+    // spotlight) shows a genuine blend of both -- weighted by however much
+    // each one actually reached it -- instead of the two just summing
+    // into a wash. Multiple lights (or multiple rays from the SAME light
+    // re-touching a pixel already hit this frame) still stack naturally:
+    // each call adds into the same running sum, it just no longer sums
+    // past 1.0 in a way that erases hue. Call ResetLightingRect on this
+    // pixel's rect first if you want a clean "starting from base" mix.
     void AccumulateLightTint(int x, int y, const Color& tint, float strength);
 
     // Uploads whatever's changed since the last Flush() as one
@@ -95,7 +120,16 @@ private:
 
     int m_Width = 0, m_Height = 0;
     std::vector<unsigned char> m_Pixels;    // RGBA8, row-major -- authored BASE truth
-    std::vector<unsigned char> m_LitPixels; // RGBA8, row-major -- base + this-frame's lighting tint; what Flush() uploads
+    std::vector<unsigned char> m_LitPixels; // RGBA8, row-major -- base mixed with this-frame's lighting; what Flush() uploads
+
+    // Per-pixel, float, row-major, NOT RGBA8 -- this frame's raw light
+    // accumulation, resolved into m_LitPixels by AccumulateLightTint on
+    // every write (see its comment) rather than held until some separate
+    // end-of-frame pass. RGB only (no alpha channel; lighting never
+    // touches solidity), so these are W*H entries each, not W*H*4.
+    std::vector<float> m_LightAccumColor;  // running sum of tint.rgb * strength, per pixel (3 floats/pixel: r,g,b)
+    std::vector<float> m_LightAccumWeight; // running sum of strength alone, per pixel (1 float/pixel)
+
     std::unique_ptr<Texture> m_Texture; // GPU mirror; null if PNG failed to load
 
     bool m_Dirty = false;

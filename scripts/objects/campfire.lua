@@ -33,6 +33,7 @@ function Campfire.new(x, y, size)
     self.light:SetFlickerColorShift(0.3, 0.25, 0.0, 0.0) -- shifts toward yellow at the flicker's peak
 
     self.body:SetLightEmitter(self.light)
+    self.light:SetToneSteps(3)
 
     return self
 end

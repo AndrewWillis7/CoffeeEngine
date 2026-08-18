@@ -67,4 +67,22 @@ public:
     float flickerSpeed = 6.0f;              // how fast the jitter cycles, roughly Hz
     float flickerIntensityAmount = 0.25f;   // +/- fraction of `brightness`
     Color flickerColorShift = Color(0.25f, 0.15f, 0.0f, 0.0f); // added toward `color` at the peak of the jitter
+
+    // Stylization knob -- quantizes the radial falloff into this many
+    // discrete concentric bands instead of a smooth continuous gradient.
+    // 0 (default) is "off": falloff is smooth, exactly the old behavior,
+    // nothing changes for a light that doesn't set this. A positive value
+    // rounds the normalized distance-from-light DOWN to the nearest
+    // 1/toneSteps before it's raised to falloffExponent (see
+    // LightingSystem.cpp), so instead of a gradient you get toneSteps
+    // flat-brightness rings -- 3 reads as a punchy, posterized "video
+    // game torch" look (bright core / mid ring / dim ring), higher
+    // numbers approach smooth again as the bands get thinner than a
+    // pixel. Combined with LightingSystem's now-exact (not ray-sampled)
+    // circular radius cutoff, toneSteps=3 on a Point light is the
+    // "stylized 3-tone light in a perfect circle" look -- deliberately a
+    // per-light setting, not an engine-wide one, so a moody torch and a
+    // clean directional spotlight can sit in the same scene with
+    // different looks.
+    int toneSteps = 0;
 };

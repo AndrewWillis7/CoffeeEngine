@@ -31,8 +31,8 @@ function Player.new(x, y, w, h)
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
 
     self.config = PlayerActorConfig.new()
-    self.config:SetMoveSpeed(250)
-    self.config:SetJumpForce(550)
+    self.config:SetMoveSpeed(75)
+    self.config:SetJumpForce(200)
     self.body:SetPlayerConfig(self.config)
 
     return self

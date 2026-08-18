@@ -4,6 +4,7 @@ local Prop = require("objects.prop")
 local Camera = require("objects.camera")
 local ArtObject = require("objects.art_object")
 local Campfire = require("objects.campfire")
+local Spotlight = require("objects.spotlight")
 local Constants = require("core.constants")
 
 function Init()
@@ -60,6 +61,20 @@ function Init()
     -- to orange, live, every frame (nothing here is baked) -- see
     -- Campfire.lua for why its radius is 60, not the old 140.
     campfire = Campfire.new(178, 147.5)
+
+    -- A second, cooler light source up in the top-right corner of the
+    -- 320x180 stage, aimed down-left across the whole floor -- see
+    -- Spotlight.lua. Its radius (300) is deliberately much bigger than
+    -- the campfire's (60): the two lights are meant to OVERLAP everywhere
+    -- the player can stand, not take turns. Walk left, away from the
+    -- fire, and the mix (see PixelSprite::AccumulateLightTint) shifts
+    -- from campfire-orange toward this light's violet as the campfire's
+    -- short-range contribution fades out while this one's long, gentle
+    -- falloff barely changes -- stand between them and both colors mix
+    -- into the same pixels at once, rather than one replacing the other.
+    -- 140 degrees points from this corner down toward the floor/campfire
+    -- area (0 = +X/right, 90 = +Y/down -- see Spotlight.lua's comment).
+    spotlight = Spotlight.new(300, 10, 140)
 
     -- Background decoration -- no collision, never simulated, just sits
     -- there. crate.png is natively 40x40; SetScale(1.5) draws it at
