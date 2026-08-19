@@ -274,5 +274,19 @@ void ActorRegistry::Clear() {
     m_Cameras.clear();
     m_LightEmitters.clear();
     m_GeneratedSprites.clear();
+
+    // m_BorderSprite is non-owning and MAY have pointed into
+    // m_GeneratedSprites (e.g. Actors.SetBorderSprite(Sprite.NewSolid(...)))
+    // just cleared above -- leaving it set would dangle into freed memory
+    // until a reloaded script calls SetBorderSprite() again (if it even
+    // does). A border built from Sprite.Load(...) instead lives in
+    // m_PixelSprites, which Clear() does NOT sweep (see its header
+    // comment) -- but there's no cheap way to tell here which pool a
+    // given pointer came from, so this always resets to null and relies
+    // on the fresh Init() that follows a reload to set it again if the
+    // script wants one. Same "hot-reload replays whatever Init() sets up"
+    // reasoning m_NamedShaders/m_PixelSprites already lean on elsewhere.
+    m_BorderSprite = nullptr;
+
     // m_NamedShaders/m_PixelSprites intentionally NOT cleared -- see header comments.
 }

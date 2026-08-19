@@ -36,7 +36,20 @@ void Texture::Upload(const unsigned char* pixels, unsigned int glFormat, Filter 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glFilter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Default unpack alignment is 4 bytes/row. RGBA is always 4 bytes/texel
+    // so every row is already aligned regardless of width -- fine. A
+    // single-channel (GL_ALPHA) upload is 1 byte/texel though, so any row
+    // whose width isn't a multiple of 4 gets read shifted/sheared unless
+    // this is set to 1. Font's 128-wide atlas happened to already be a
+    // multiple of 4, which is why this bug was invisible so far.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, (glFormat == GL_ALPHA) ? 1 : 4);
     glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(glFormat), m_Width, m_Height, 0, glFormat, GL_UNSIGNED_BYTE, pixels);
+    // Global GL state, not per-texture -- reset to the default so this
+    // doesn't silently affect some other Texture's upload that runs
+    // later and assumes default unpack state (same reasoning UpdateRegion
+    // below already uses for GL_UNPACK_ROW_LENGTH).
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

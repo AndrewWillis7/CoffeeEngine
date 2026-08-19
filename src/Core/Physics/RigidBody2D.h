@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include "../Math/Vector2.h"
 #include "../Math/Transform2D.h"
 #include "../Math/Color.h"
@@ -106,8 +107,17 @@ public:
             velocity += s_Gravity * dt;
         }
 
+        // Exponential decay, framerate-independent -- same shape as
+        // Camera2D::Follow's own dt-scaled exponential. The old
+        // `velocity *= (1.0f - drag * dt)` linear form flips sign once
+        // `drag * dt > 1.0` (a high drag value, a low framerate, or a
+        // hitch) instead of just damping toward zero -- e.g. drag=20 at
+        // 20fps (dt=0.05) computes a factor of 0.0, and anything
+        // slightly higher goes negative, reversing the body's velocity
+        // instead of slowing it down. std::exp(-drag * dt) can't cross
+        // zero, so it always damps, never reverses, regardless of dt.
         if (drag > 0.0f)
-            velocity *= (1.0f - drag * dt);
+            velocity *= std::exp(-drag * dt);
 
         transform.position += velocity * dt;
         m_ForceAccum = Vector2::Zero();

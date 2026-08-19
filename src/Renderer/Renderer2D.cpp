@@ -158,7 +158,13 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
         // inner.h/m_CameraViewport.y are equal (FitAspect only ever
         // applies a single uniform scale, never a non-uniform stretch),
         // so either axis works here; x is used for a single scalar.
-        float pixelScale = m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f;
+        // Also folds in m_PixelScale (see SetPixelScale's header comment)
+        // so the border's own grid stays visually matched to however
+        // chunky the rest of the world currently is -- without this, the
+        // border's stars/clouds would keep rendering at the OLD
+        // (PixelScale == 1) grain even after a script chunks up every
+        // actor via SetPixelScale(), which would look inconsistent.
+        float pixelScale = (m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f) * m_PixelScale;
         borderShader->SetFloat("u_PixelScale", pixelScale);
 
         if (borderTexture && borderTexture->IsValid()) {
@@ -168,23 +174,6 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
             DrawScreenQuad({{m_Width * 0.5f, m_Height * 0.5f}, 0.0f}, {m_Width, m_Height}, Color::White(), borderShader);
         }
     }
-
-    // How many real screen pixels currently correspond to one
-    // native/virtual pixel -- lets a procedural border shader (see
-    // border.frag) quantize itself onto the SAME pixel grid the rest
-    // of the game's pixel art renders at, regardless of the real
-    // window's size. inner.w/m_CameraViewport.x and
-    // inner.h/m_CameraViewport.y are equal (FitAspect only ever
-    // applies a single uniform scale, never a non-uniform stretch),
-    // so either axis works here; x is used for a single scalar.
-    // Also folds in m_PixelScale (see SetPixelScale's header comment)
-    // so the border's own grid stays visually matched to however
-    // chunky the rest of the world currently is -- without this, the
-    // border's stars/clouds would keep rendering at the OLD
-    // (PixelScale == 1) grain even after a script chunks up every
-    // actor via SetPixelScale(), which would look inconsistent.
-    float pixelScale = (m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f) * m_PixelScale;
-    borderShader->SetFloat("u_PixelScale", pixelScale);
 
     EnsureViewport(ViewportMode::Content);
 }
@@ -218,6 +207,14 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
         viewport = viewport / m_PixelScale;
     }
 
+    // Real window size, pixels -- kept separate from u_ViewportSize (which
+    // drives the actual position math, see quad.vert) purely for fragment
+    // shaders that want real screen pixels regardless of camera/pixel-scale
+    // state, e.g. border.frag's star/cloud grid. This was never actually
+    // being set from C++ before, which silently zeroed border.frag's whole
+    // star/cloud layer (everything in it is derived from u_Resolution).
+    shader.SetVec2("u_Resolution", m_Width, m_Height);
+
     shader.SetFloat("u_Time", m_Time);
     shader.SetVec2("u_Position", transform.position.x, transform.position.y);
     shader.SetVec2("u_Size", size.x, size.y);
@@ -245,7 +242,12 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
 void Renderer2D::SubmitQuad(Shader& active) {
     GL::BindBuffer(GL_ARRAY_BUFFER, m_VBO);
 
-    GLint posAttrib = GL::GetAttribLocation(active.GetProgram(), "a_LocalPos");
+    // Goes through Shader::GetAttribLocation's own cache (see Shader.h)
+    // instead of calling GL::GetAttribLocation directly -- this runs once
+    // per quad, and re-querying the driver by name every single draw call
+    // is exactly the kind of redundant round-trip that cache exists to
+    // avoid (some drivers implicitly sync on this call).
+    GLint posAttrib = active.GetAttribLocation("a_LocalPos");
     if (posAttrib >= 0) {
         GL::EnableVertexAttribArray(static_cast<GLuint>(posAttrib));
         GL::VertexAttribPointer(static_cast<GLuint>(posAttrib), 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);

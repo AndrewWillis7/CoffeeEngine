@@ -1,6 +1,7 @@
 #include "ScriptEngine.h"
 #include "EngineContext.h"
 #include "ActorRegistry.h"
+#include "Gameplay/LightingSystem.h"
 #include "Scripting/ScriptBindings.h"
 #include "Input/KeyMap.h"
 
@@ -94,6 +95,16 @@ void ScriptEngine::Reload() {
     std::cout << "Reloading Lua scripts...\n";
 
     Shutdown();
+
+    // LightingSystem::m_PrevLitRects holds raw RigidBody2D* left over
+    // from last frame -- Reset() MUST run before (or at least alongside)
+    // actors->Clear() below destroys those bodies, or the very next
+    // UpdateLighting() call's first pass dereferences freed memory. See
+    // LightingSystem::Reset()'s own comment for why dropping this
+    // bookkeeping (rather than trying to erase through it first) is safe.
+    if (m_Context->lighting) {
+        m_Context->lighting->Reset();
+    }
     if (m_Context->actors) {
         m_Context->actors->Clear();
     }
