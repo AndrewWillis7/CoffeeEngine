@@ -17,7 +17,13 @@ function Init()
     -- Player is the base unit everything else on this floor is laid out
     -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
     -- above the floor's open left end and falls onto it.
-    player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT)
+    player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, {
+        legging = { width = 4, height = 11, color = {0.36, 0.24, 0.52} },
+        knee    = { width = 5, height = 3,  color = {0.22, 0.14, 0.30} },
+        boot    = { width = 6, height = 4,  color = {0.10, 0.09, 0.12} },
+        stride  = 22,
+        stepHeight = 4,
+    })
 
     -- The ground. Replaces the old flat 1000x15 StaticBody floor
     -- entirely: this is a real, noise-generated terrain chunk -- uneven

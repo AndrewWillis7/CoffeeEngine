@@ -5,35 +5,76 @@
 -- the RigidBody2D directly, this class only owns PLAYER-specific behavior
 -- (movement + jump).
 --
+-- Inherits LegRig (objects/leg_rig.lua), so the player IS a legged actor:
+-- everything an NPC would use to walk -- module sizes/colors, the knee
+-- joint, ground snapping, the gait -- is the same code path, configured
+-- through the same table.
+--
 -- SetPlayerConfig() is still called during construction so the existing
 -- C++-side "who is the player" mechanism (Actors.GetPlayer(), the debug
--- UI, ActorRegistry::DumpTree()) keeps working exactly as before -- this
--- class sits ON TOP of that, it doesn't replace it.
+-- UI, ActorRegistry::DumpTree()) keeps working exactly as before.
 
 local Class = require("core.Class")
+local LegRig = require("objects.leg_rig")
 
-local Player = Class()
+local Player = Class(LegRig)
 
-function Player.new(x, y, w, h)
+-- h is the TOTAL character height (torso + legs), same meaning it had
+-- before legs existed -- a 16x32 player is still 16x32 from the crown of
+-- its head to the soles of its boots, and still collides as one box that
+-- size. What changed is that the bottom LegRig:GetStandHeight() texels of
+-- that box are now legs rather than torso:
+--
+--   body position ---> +---------+  <- torso sprite (w x torsoHeight)
+--                      |         |
+--                      +---------+  <- hips
+--                         | |        legs (standHeight)
+--                         o o     <- collider bottom == where feet land
+--
+-- The collider is authored with an OFFSET (CollisionShape2D.NewBox's
+-- 3rd/4th args) rather than by moving the body, because the body's
+-- position has to stay the TORSO'S center -- that's the point DrawBody
+-- draws the torso sprite around, and the point the camera follows.
+--
+-- legConfig is forwarded straight to LegRig (see its Defaults table).
+-- Pass `false` for a legless player -- the torso then fills the full
+-- height and every leg call becomes a no-op.
+function Player.new(x, y, w, h, legConfig)
     w = w or 50
     h = h or 50
 
-    local self = setmetatable({}, Player)
+    -- Base part first, then re-tag -- the inheritance pattern documented
+    -- in core/Class.lua. The rig has to exist before the torso can be
+    -- sized, because GetStandHeight() is what decides how much of `h` is
+    -- leg rather than torso.
+    local self = LegRig.new(legConfig)
+    setmetatable(self, Player)
 
-    self.body = RigidBody2D.new(x, y, w, h)
+    local standHeight = math.min(self:GetStandHeight(), h - 1)
+    local torsoHeight = math.max(1, math.floor(h - standHeight + 0.5))
+    standHeight = h - torsoHeight
+
+    self.body = RigidBody2D.new(x, y, w, torsoHeight)
 
     -- Solid white generated sprite instead of a flat-color quad -- makes
     -- the player pixel-addressable too, so lighting (a torch flickering
     -- across the player as they walk by) actually shows up on them.
-    self.sprite = Sprite.NewSolid(w, h, 1.0, 1.0, 1.0, 1.0)
+    self.sprite = Sprite.NewSolid(w, torsoHeight, 1.0, 1.0, 1.0, 1.0)
     self.body:SetSprite(self.sprite)
 
-    self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
+    self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2, 0, standHeight / 2))
 
     self.config = PlayerActorConfig.new()
     self.config:SetMoveSpeed(75)
     self.config:SetJumpForce(200)
     self.body:SetPlayerConfig(self.config)
+
+    -- Hips at the torso's bottom edge; feet then land exactly on the
+    -- collider's bottom edge, which is what's resting on the floor.
+    self:SetOwner(self.body, torsoHeight / 2)
+
+    self.torsoHeight = torsoHeight
+    self.height = h
 
     return self
 end
@@ -65,7 +106,9 @@ end
 -- solids: array of RigidBody2D to resolve collisions against this frame
 -- (e.g. {floor, wall, crate}). Kept as a plain parameter rather than
 -- something Player tracks itself -- which bodies count as "solid" is a
--- level concern, not a player concern.
+-- level concern, not a player concern. The SAME list doubles as what the
+-- leg rig ground-snaps against, so feet and collider always agree on
+-- what the floor is.
 --
 -- worldWidth/worldHeight: the play area's bounds IN TEXELS (world
 -- units) -- e.g. Constants.RESOLUTION_WIDTH/HEIGHT for a level that fits
@@ -73,10 +116,7 @@ end
 -- GetHeight() -- those are REAL window/monitor pixels, a completely
 -- different number from the texel grid every body's position/size is
 -- authored in the moment a Camera2D with its own viewportSize is in
--- play (see Camera2D.h). Falls back to the real window size only if the
--- caller doesn't pass anything, so this stays harmless for a script that
--- never sets up a camera at all (the old "world pixels == window
--- pixels" identity-mapping default -- see Renderer2D::ApplyCommonUniforms).
+-- play (see Camera2D.h).
 function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self:HandleInput()
     self.body:Integrate(deltaTime)
@@ -84,26 +124,23 @@ function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
     if solids then
         for _, solid in ipairs(solids) do
-            -- Two accepted entry shapes, because not everything solid is a
-            -- box any more. A collidable OBJECT (StaticBody, Terrain, ...)
-            -- exposes ResolveAgainst and decides for itself how it's
-            -- shaped -- terrain resolves against its heightmap, a
-            -- StaticBody against its AABB. A bare RigidBody2D still works
-            -- as before for anything that hasn't been wrapped in a class
-            -- yet. Indexing a RigidBody2D userdata for a method it doesn't
-            -- have is safe (its metatable's __index is the method table,
-            -- so this reads nil rather than erroring).
-            if solid.ResolveAgainst then
-                solid:ResolveAgainst(self.body)
-            else
-                self.body:ResolveCollisionWith(solid)
-            end
+            self.body:ResolveCollisionWith(solid)
         end
     end
+
+    -- Legs last: they follow wherever the torso actually ENDED UP this
+    -- frame (post-collision), so a foot never plants at a position the
+    -- body then gets pushed out of.
+    self:UpdateLegs(deltaTime, solids)
 end
 
+-- Far leg, torso, near leg -- the shade multiplier on the back leg (see
+-- LegRig.Defaults.legs) plus this ordering is what sells the depth
+-- without a second set of art or any z-buffer.
 function Player:Draw()
+    self:DrawLegs("back")
     DrawBody(self.body)
+    self:DrawLegs("front")
 end
 
 return Player
