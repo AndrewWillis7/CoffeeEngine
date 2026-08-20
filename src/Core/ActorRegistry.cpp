@@ -4,6 +4,7 @@
 #include "Gameplay/PlayerActorConfig.h"
 #include "Gameplay/Camera2D.h"
 #include "Gameplay/LightEmitterConfig.h"
+#include "Gameplay/Terrain/TerrainChunk.h"
 #include "Math/Transform2D.h"
 #include "Renderer/Shader.h"
 #include "Renderer/ShaderLibrary.h"
@@ -203,6 +204,13 @@ LightEmitterConfig* ActorRegistry::CreateLightEmitter() {
     return raw;
 }
 
+TerrainChunk* ActorRegistry::CreateTerrainChunk() {
+    auto chunk = std::make_unique<TerrainChunk>();
+    TerrainChunk* raw = chunk.get();
+    m_TerrainChunks.push_back(std::move(chunk));
+    return raw;
+}
+
 void ActorRegistry::DumpTree() const {
     std::cout << "ActorRegistry (" << m_Bodies.size() << " bodies)\n";
     for (const auto& body : m_Bodies) {
@@ -256,6 +264,7 @@ std::vector<std::string> ActorRegistry::GetDebugLines() const {
               << (body->collisionShape ? (body->collisionShape->GetType() == CollisionShape2D::Type::Box ? "[Box]" : "[Circ]") : "")
               << (body->playerConfig ? "[Ply]" : "")
               << (body->lightEmitter ? "[Lit]" : "")
+              << (body->terrain ? "[Ter]" : "")
               << (body->lightBlocking ? "[Blk]" : "");
         lines.push_back(flags.str());
     }
@@ -273,6 +282,7 @@ void ActorRegistry::Clear() {
     m_PlayerConfigs.clear();
     m_Cameras.clear();
     m_LightEmitters.clear();
+    m_TerrainChunks.clear();
     m_GeneratedSprites.clear();
 
     // m_BorderSprite is non-owning and MAY have pointed into

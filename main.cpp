@@ -6,6 +6,7 @@
 #include "Core/Input/UserInputService.h"
 #include "Core/Gameplay/UI/EngineUIController.h"
 #include "Core/Gameplay/LightingSystem.h"
+#include "Core/Gameplay/Terrain/TerrainSystem.h"
 #include "Renderer/Renderer2D.h"
 #include <chrono>
 #include <iostream>
@@ -39,6 +40,7 @@ int main() {
     UserInputService inputService;
 
     LightingSystem lightingSystem;
+    TerrainSystem TerrainSystem;
 
     // Script Stuff
     EngineContext engineContext;
@@ -48,6 +50,7 @@ int main() {
     engineContext.actors = &actorRegistry;
     engineContext.input = &inputService;
     engineContext.lighting = &lightingSystem;
+    engineContext.terrain = &TerrainSystem;
 
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);

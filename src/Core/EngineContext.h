@@ -6,6 +6,7 @@ class Renderer2D;
 class ActorRegistry;
 class UserInputService;
 class LightingSystem;
+class TerrainSystem;
 
 // Bundles pointers to engine subsystems that need exposing
 
@@ -16,4 +17,5 @@ struct EngineContext {
     ActorRegistry* actors = nullptr;
     UserInputService* input = nullptr;
     LightingSystem* lighting = nullptr;
+    TerrainSystem* terrain = nullptr;
 };

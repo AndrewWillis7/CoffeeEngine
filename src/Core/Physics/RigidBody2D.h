@@ -10,6 +10,7 @@ class Shader;
 class PlayerActorConfig;
 class PixelSprite;
 class LightEmitterConfig;
+class TerrainChunk;
 
 // Minimal liner-motion body: velocity + accumulated force, integrated with
 // semi-implicit Euler. No collision response (for now...) -- collisionShape
@@ -50,6 +51,20 @@ public:
     // tints nearby sprite-backed bodies' solid pixels according to
     // whatever's configured on it.
     LightEmitterConfig* lightEmitter = nullptr;
+
+    // Non-owning, same lifetime convention as the pointers above. When
+    // set, this body IS a patch of procedural ground -- TerrainSystem
+    // (see Core/Gameplay/Terrain/TerrainSystem.h) finds it every frame the
+    // same way LightingSystem finds lightEmitter, and paints/animates the
+    // grass into this body's `sprite`.
+    //
+    // A terrain body deliberately has NO collisionShape: its surface is a
+    // heightmap, not a box, so it resolves collision through
+    // TerrainChunk::ResolveBody instead (which routes back into
+    // ApplyCollisionCorrection below, so the velocity/grounded
+    // conventions stay identical to the AABB path). Leaving a box on it
+    // as well would give it a flat lid that fights the real surface.
+    TerrainChunk* terrain = nullptr;
 
     // Plain bool, not a pointer-tag like the above -- there's no per-
     // instance configuration yet (see LightEmitterConfig.h's header
@@ -210,6 +225,38 @@ public:
         if (correction.y < 0.0f) m_Grounded = true;
 
         return true;
+    }
+
+    // Applies a positional correction computed SOMEWHERE ELSE -- by a
+    // collider that isn't a pair of AABBs and so can't go through
+    // ResolveCollisionWith above. Concretely: TerrainChunk::ResolveBody,
+    // which samples a heightmap rather than intersecting two boxes, but
+    // still needs the exact same three follow-up behaviors every other
+    // resolution path in this class has, and shouldn't be re-deriving
+    // them (or quietly getting one of them wrong):
+    //   - move by the correction,
+    //   - zero velocity on whichever axis moved, so a resting body stops
+    //     accumulating gravity underneath a clamp that's silently
+    //     catching it every frame (see ResolveCollisionWith's own comment
+    //     for what that costs the first frame the clamp misses),
+    //   - correction.y < 0 means "pushed up out of something", i.e.
+    //     grounded, on the same convention as everything above.
+    //
+    // Deliberately NOT wired into ResolveCollisionWith/ResolveWindowBounds
+    // as a shared helper, even though the bodies of all three now look
+    // alike: ResolveCollisionWith splits its correction by mass and then
+    // decides the velocity/grounded question from the FULL correction
+    // rather than self's share of it, so routing it through here would
+    // silently change what an immovable body sees when it resolves
+    // against a movable one. Worth unifying, but as its own change with
+    // its own testing -- flagging it rather than folding it in here.
+    void ApplyCollisionCorrection(const Vector2& correction) {
+        if (correction.x == 0.0f && correction.y == 0.0f) return;
+
+        transform.position += correction;
+        if (correction.x != 0.0f) velocity.x = 0.0f;
+        if (correction.y != 0.0f) velocity.y = 0.0f;
+        if (correction.y < 0.0f) m_Grounded = true;
     }
     
     // Clamps this body fully inside [0,0]..[windowWidth,windowHeight] -- an

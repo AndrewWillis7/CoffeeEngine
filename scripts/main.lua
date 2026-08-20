@@ -6,6 +6,7 @@ local ArtObject = require("objects.art_object")
 local Campfire = require("objects.campfire")
 local Spotlight = require("objects.spotlight")
 local Constants = require("core.constants")
+local Terrain = require("objects.terrain")
 
 function Init()
     print("Engine Initialized")
@@ -18,34 +19,40 @@ function Init()
     -- above the floor's open left end and falls onto it.
     player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT)
 
-    -- Floor is 100x15 texels -- NOT meant to span the whole native
-    -- viewport (320 wide); it's a single starting platform with open
-    -- world beyond both ends, the same way a real level's first screen
-    -- would be. Centered on the stage; everything below sits ON it (see
-    -- the comments at each object for how their Y was derived from this
-    -- floor's own top edge, floor_top = 163 - 15/2 = 155.5).
-    floor = StaticBody.new(160, 163, 1000, 15, 0.0, 0.0, 0.0)
+    -- The ground. Replaces the old flat 1000x15 StaticBody floor
+    -- entirely: this is a real, noise-generated terrain chunk -- uneven
+    -- dirt with per-pixel grass growing out of it, all of it lit by the
+    -- same LightingSystem pass everything else goes through, and all of
+    -- it collided against as a heightmap rather than a box.
+    --
+    -- Geometry: 320 wide (exactly the native stage width) x 48 tall,
+    -- centered at (160, 156) -- so its top edge is y=132 and its bottom
+    -- sits flush on the bottom of the 180-tall stage. surfaceOffset 16
+    -- puts the MEAN surface at y=148, and the amplitude below swings it
+    -- roughly y=142..154 -- around a third of a player-height of relief,
+    -- which is enough to read as real ground rather than a decorated
+    -- line, while still being walkable everywhere (maxStepHeight
+    -- defaults to 6). That leaves the grass (up to 5 texels tall)
+    -- comfortably inside the sprite's own top edge, which is the one
+    -- constraint terrain sizing has -- see Terrain.new's comment.
+    --
+    -- Change `seed` and you get a completely different, equally valid
+    -- piece of ground; change nothing and it regenerates identically
+    -- across hot-reloads.
+    terrain = Terrain.new(160, 156, 320, 48, {
+        seed = 1,
+        surfaceAmplitude = 9,
+        surfaceOffset = 16,
+        surfaceFrequency = 0.03,
+        grassDensity = 0.85,
+    })
 
-    -- 16x48 -- one player-width wide, one and a half player-heights
-    -- tall, so it visibly reads as taller than the player rather than
-    -- just a same-size box with a different color. Sits at the floor's
-    -- right end: center_y = floor_top - 48/2 = 131.5.
-    wall = StaticBody.new(198, 131.5, 16, 48, 0.6, 0.2, 0.2)
-
-    -- crate.png is a real 40x40 PNG asset -- RigidBody2D::SetSprite
-    -- forces body.size to the SPRITE's native pixel dimensions the
-    -- moment it's attached (see ScriptBindings.cpp), so passing smaller
-    -- w/h here wouldn't actually shrink it, and scaling it down visually
-    -- with SetScale (like `background` below does) would just make a
-    -- smoothly-minified miniature of a 40x40 image rather than genuine
-    -- chunky pixel art on the SAME texel grid as the 16x32 player --
-    -- it'd stop reading as "on the grid" the moment it's smaller than
-    -- native. Left at its real size and just repositioned for now
-    -- (floor_top - 40/2 = 135.5) -- a deliberately oversized crate is a
-    -- reasonable art choice, but if you want it grid-consistent instead,
-    -- that means re-exporting crate.png itself at ~16x16, not scaling
-    -- the existing file. Happy to help with that either way.
-    --crate = Prop.new(146, 135.5, 40, 40, "Art/crate.png")
+        -- Its Y is no longer a hand-computed constant: the ground is uneven
+    -- now, so "sitting on the floor" means asking the terrain where its
+    -- surface actually is at this X and centering on that. This is the
+    -- normal way to place anything on terrain -- see Terrain:SurfaceYAt.
+    local wallX, wallHeight = 198, 48
+    wall = StaticBody.new(wallX, terrain:SurfaceYAt(wallX) - wallHeight / 2, 16, wallHeight, 0.6, 0.2, 0.2)
 
     -- Casts a hard shadow -- light_blocking bodies stop a light ray dead
     -- at their first solid pixel instead of letting it pass through (see
@@ -54,13 +61,8 @@ function Init()
     -- still tints whatever solid pixels it touches along the way.
     wall.body:SetLightBlocking(true)
 
-    -- Sits in the open gap between the crate and the wall (floor_top -
-    -- 16/2 = 147.5, its own default 16x16 size matches PLAYER_WIDTH
-    -- exactly). Walk the player toward it from the spawn point and
-    -- watch the floor/wall/crate/player's own pixels nearest it warm up
-    -- to orange, live, every frame (nothing here is baked) -- see
-    -- Campfire.lua for why its radius is 60, not the old 140.
-    campfire = Campfire.new(178, 147.5)
+    local campfireX, campfireSize = 178, 16
+    campfire = Campfire.new(campfireX, terrain:SurfaceYAt(campfireX) - campfireSize / 2, campfireSize)
 
     -- A second, cooler light source up in the top-right corner of the
     -- 320x180 stage, aimed down-left across the whole floor -- see
@@ -87,7 +89,7 @@ function Init()
     --background = ArtObject.new(160, 55, 40, 40, "Art/crate.png")
     --background:SetScale(1.5)
 
-    solids = {floor.body, wall.body}
+    solids = {terrain, wall}
 
     -- Native pixel-art resolution + aspect, see core.constants -- the
     -- "resolution control" knob; every world pixel draws
@@ -150,6 +152,8 @@ function Update(deltaTime)
     camera:Update(deltaTime)
     SyncCamera()
 
+    UpdateTerrain(deltaTime)
+
     -- Recomputes every light's per-pixel tint fresh THIS frame -- never
     -- baked, so a light that moved (or the player walking past one)
     -- shows up immediately. Runs once a frame, same convention as
@@ -162,7 +166,7 @@ function Update(deltaTime)
     -- BEFORE them meant an adjacent crate could paint right over it.
     -- Campfire drawn last so its glow reads as sitting in front of
     -- whoever's standing next to it.
-    floor:Draw()
+    terrain:Draw()
     wall:Draw()
     player:Draw()
     campfire:Draw()

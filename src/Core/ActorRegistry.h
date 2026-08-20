@@ -11,6 +11,7 @@ class PlayerActorConfig;
 class PixelSprite;
 class Camera2D;
 class LightEmitterConfig;
+class TerrainChunk;
 
 // Owns the Rigidbody2D, Shader, CollisionShape2D, and PlayerActorConfig
 // instances created from LUA. Outlives the individual script calls but
@@ -73,6 +74,15 @@ public:
     // expensive engine asset), attach via RigidBody2D::lightEmitter.
     LightEmitterConfig* CreateLightEmitter();
 
+    // Same lifetime/pooling convention as CreateLightEmitter/
+    // CreatePlayerConfig -- owned here, wiped by Clear() (Lua-ephemeral
+    // gameplay state, not an expensive engine asset), attached via
+    // RigidBody2D::terrain. The generated pixels themselves live in the
+    // PixelSprite the chunk is told to paint into, which is exactly why
+    // this stays cheap to throw away and rebuild on hot-reload: the
+    // heightmap and blade list regenerate from `seed` in a millisecond.
+    TerrainChunk* CreateTerrainChunk();
+
     // Non-owning, same lifetime convention as every other cross-reference
     // here -- the PixelSprite itself is owned by whichever GetOrLoadPixelSprite
     // call created it. Renderer2D::SetActiveCamera (via SyncCamera(), see
@@ -119,6 +129,7 @@ private:
     std::vector<std::unique_ptr<PlayerActorConfig>> m_PlayerConfigs;
     std::vector<std::unique_ptr<Camera2D>> m_Cameras;
     std::vector<std::unique_ptr<LightEmitterConfig>> m_LightEmitters;
+    std::vector<std::unique_ptr<TerrainChunk>> m_TerrainChunks;
     std::vector<std::unique_ptr<Shader>> m_Shaders;
     std::unordered_map<std::string, std::unique_ptr<Shader>> m_NamedShaders;
 

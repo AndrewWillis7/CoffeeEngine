@@ -425,6 +425,221 @@ function Camera2D:GetZoomOut() end
 function Camera2D:SetZoomOut(zoom) end
 
 -- =====================================================================
+-- TerrainChunk -- pointer type, owned by ActorRegistry
+-- (RegisterTerrainChunk). Attach via RigidBody2D:SetTerrain(). Normally
+-- you don't touch this directly -- objects/terrain.lua wraps it.
+-- =====================================================================
+---@class TerrainChunk
+TerrainChunk = {}
+
+---@return TerrainChunk
+function TerrainChunk.new() end
+
+--- Builds the heightmap, paints every dirt pixel, seeds the grass. Sizes
+--- itself from the sprite. Call AFTER setting config, and again to
+--- regenerate.
+---@param sprite PixelSprite
+function TerrainChunk:Generate(sprite) end
+
+--- Pushes `body` out of the terrain heightmap. Returns true if a
+--- correction was applied.
+---@param body RigidBody2D
+---@param terrainBody RigidBody2D The body this chunk is attached to
+---@return boolean
+function TerrainChunk:ResolveBody(body, terrainBody) end
+
+--- World Y of the dirt surface under `worldX`. Snapped to a whole texel.
+---@param worldX number
+---@param terrainBody RigidBody2D
+---@return number
+function TerrainChunk:SurfaceWorldY(worldX, terrainBody) end
+
+---@return boolean
+function TerrainChunk:IsGenerated() end
+---@return integer
+function TerrainChunk:GetWidth() end
+---@return integer
+function TerrainChunk:GetHeight() end
+---@return integer
+function TerrainChunk:GetBladeCount() end
+
+-- --- surface shape (set before Generate) ---
+---@return integer
+function TerrainChunk:GetSeed() end
+---@param seed integer Same seed + same sprite size always rebuilds an identical chunk
+function TerrainChunk:SetSeed(seed) end
+
+---@return number
+function TerrainChunk:GetSurfaceFrequency() end
+---@param cyclesPerTexel number ~0.03 = gentle rolling ground at 320x180; toward 0.1 = jagged
+function TerrainChunk:SetSurfaceFrequency(cyclesPerTexel) end
+
+---@return number
+function TerrainChunk:GetSurfaceAmplitude() end
+---@param texels number +/- texels around the mean surface. FBM clusters toward its mean, so only ~half of this is used in practice -- tune by looking
+function TerrainChunk:SetSurfaceAmplitude(texels) end
+
+---@return integer
+function TerrainChunk:GetSurfaceOctaves() end
+---@param octaves integer 2-3 is plenty at pixel-art scale
+function TerrainChunk:SetSurfaceOctaves(octaves) end
+
+---@return number
+function TerrainChunk:GetSurfaceLacunarity() end
+---@param lacunarity number
+function TerrainChunk:SetSurfaceLacunarity(lacunarity) end
+
+---@return number
+function TerrainChunk:GetSurfaceGain() end
+---@param gain number
+function TerrainChunk:SetSurfaceGain(gain) end
+
+---@return number
+function TerrainChunk:GetSurfaceOffset() end
+---@param texels number Texels from the sprite's TOP EDGE to the mean surface. Must be >= surfaceAmplitude + grassMaxHeight + 1 or Generate() warns and clamps
+function TerrainChunk:SetSurfaceOffset(texels) end
+
+-- --- dirt ---
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetDirtDark(r, g, b, a) end
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetDirtLight(r, g, b, a) end
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetRockColor(r, g, b, a) end
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetTopsoilColor(r, g, b, a) end
+
+---@return number
+function TerrainChunk:GetDirtFrequency() end
+---@param cyclesPerTexel number
+function TerrainChunk:SetDirtFrequency(cyclesPerTexel) end
+
+---@return integer
+function TerrainChunk:GetDirtOctaves() end
+---@param octaves integer
+function TerrainChunk:SetDirtOctaves(octaves) end
+
+---@return integer
+function TerrainChunk:GetDirtToneSteps() end
+---@param steps integer Posterizes the dirt into N tones. 0/1 = smooth gradient (usually wrong for pixel art)
+function TerrainChunk:SetDirtToneSteps(steps) end
+
+---@return number
+function TerrainChunk:GetRockChance() end
+---@param chance number 0-1 per-pixel probability of a rock speck
+function TerrainChunk:SetRockChance(chance) end
+
+---@return number
+function TerrainChunk:GetDepthDarkening() end
+---@param amount number How much darker the bottom of the chunk is than the surface. Authored base color, independent of LightingSystem
+function TerrainChunk:SetDepthDarkening(amount) end
+
+---@return integer
+function TerrainChunk:GetTopsoilDepth() end
+---@param texels integer Grass-colored soil band under the surface. 0 disables
+function TerrainChunk:SetTopsoilDepth(texels) end
+
+-- --- grass ---
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetGrassDark(r, g, b, a) end
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil
+function TerrainChunk:SetGrassLight(r, g, b, a) end
+
+---@return integer
+function TerrainChunk:GetGrassMinHeight() end
+---@param texels integer Clamped to 1..8
+function TerrainChunk:SetGrassMinHeight(texels) end
+
+---@return integer
+function TerrainChunk:GetGrassMaxHeight() end
+---@param texels integer Clamped to grassMinHeight..8
+function TerrainChunk:SetGrassMaxHeight(texels) end
+
+---@return number
+function TerrainChunk:GetGrassDensity() end
+---@param density number 0-1 per-column probability of a blade. Below 1 is what stops the surface reading as a solid green stripe
+function TerrainChunk:SetGrassDensity(density) end
+
+---@return number
+function TerrainChunk:GetSwayAmplitude() end
+---@param texels number Idle tip displacement. Keep near 1-2; a blade only has 3-5 pixels to bend across
+function TerrainChunk:SetSwayAmplitude(texels) end
+
+---@return number
+function TerrainChunk:GetSwaySpeed() end
+---@param speed number
+function TerrainChunk:SetSwaySpeed(speed) end
+
+---@return number
+function TerrainChunk:GetSwayPhasePerTexel() end
+---@param phase number Makes the wind travel along the ground as a wave instead of every blade leaning in lockstep
+function TerrainChunk:SetSwayPhasePerTexel(phase) end
+
+---@return number
+function TerrainChunk:GetBendStiffness() end
+---@param stiffness number Recovery speed; natural frequency ~= sqrt(stiffness) rad/s
+function TerrainChunk:SetBendStiffness(stiffness) end
+
+---@return number
+function TerrainChunk:GetBendDamping() end
+---@param damping number ~9 = one small wobble on recovery; toward 3 = bouncier
+function TerrainChunk:SetBendDamping(damping) end
+
+---@return number
+function TerrainChunk:GetMaxBend() end
+---@param texels number Hard clamp so a fast pass can't fold a blade across the map
+function TerrainChunk:SetMaxBend(texels) end
+
+---@return number
+function TerrainChunk:GetDisturbStrength() end
+---@param strength number How hard a moving body shoves nearby blades
+function TerrainChunk:SetDisturbStrength(strength) end
+
+---@return number
+function TerrainChunk:GetDisturbPadding() end
+---@param texels number Extra reach either side of a disturber, so grass reacts just before contact
+function TerrainChunk:SetDisturbPadding(texels) end
+
+---@return number
+function TerrainChunk:GetDisturbSpeedScale() end
+---@param scale number Extra push per unit of |velocity.x|
+function TerrainChunk:SetDisturbSpeedScale(scale) end
+
+-- --- collision ---
+---@return number
+function TerrainChunk:GetMaxStepHeight() end
+---@param texels number Largest rise the body can climb in one resolution. Anything taller resolves horizontally instead (acts as a wall)
+function TerrainChunk:SetMaxStepHeight(texels) end
+
+-- =====================================================================
+-- Terrain -- bare global (RegisterTerrainSystem)
+-- =====================================================================
+
+--- Ticks every TerrainChunk: springs each grass blade toward the wind,
+--- applies disturbers, repaints blade pixels. Call once a frame AFTER
+--- gameplay has moved and BEFORE UpdateLighting().
+---@param deltaTime number
+function UpdateTerrain(deltaTime) end
+
+-- =====================================================================
 -- Actors -- ActorRegistry-wide queries (RegisterActorRegistry)
 -- =====================================================================
 ---@class Actors

@@ -33,4 +33,15 @@ function StaticBody:Draw()
     DrawBody(self.body)
 end
 
+--- Resolves `body` out of this one, box-vs-box. Exists so a level can
+--- keep ONE `solids` list containing both StaticBodys and Terrains and
+--- let the mover call them all the same way -- terrain's surface is a
+--- heightmap and resolves through a different path entirely (see
+--- Terrain:ResolveAgainst), and nothing that walks around should have to
+--- know which kind of ground it's standing on.
+--- @param body userdata RigidBody2D to push out
+function StaticBody:ResolveAgainst(body)
+    body:ResolveCollisionWith(self.body)
+end
+
 return StaticBody

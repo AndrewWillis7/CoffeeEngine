@@ -9,6 +9,8 @@
 #include "Core/Gameplay/Camera2D.h"
 #include "Core/Gameplay/LightEmitterConfig.h"
 #include "Core/Gameplay/LightingSystem.h"
+#include "Core/Gameplay/Terrain/TerrainChunk.h"
+#include "Core/Gameplay/Terrain/TerrainSystem.h"
 #include "Core/Math/Vector2.h"
 #include "Core/Math/Transform2D.h"
 #include "Core/Math/Color.h"
@@ -42,6 +44,7 @@ namespace LuaBinding {
     template <> struct MetatableOf<IWindow>             { static constexpr const char* name = "Coffee.IWindow"; };
     template <> struct MetatableOf<PixelSprite>         { static constexpr const char* name = "Coffee.PixelSprite"; };
     template <> struct MetatableOf<LightEmitterConfig>  { static constexpr const char* name = "Coffee.LightEmitterConfig"; };
+    template <> struct MetatableOf<TerrainChunk>        { static constexpr const char* name = "Coffee.TerrainChunk"; };
 
     template <> struct IsValueType<Vector2> : std::true_type {};
 
@@ -240,6 +243,7 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&RigidBody2D::playerConfig>("GetPlayerConfig", "SetPlayerConfig")
         .PtrProperty<&RigidBody2D::camera>("GetCamera", "SetCamera")
         .PtrProperty<&RigidBody2D::lightEmitter>("GetLightEmitter", "SetLightEmitter")
+        .PtrProperty<&RigidBody2D::terrain>("GetTerrain", "SetTerrain")
         .Property<&RigidBody2D::lightBlocking>("IsLightBlocking", "SetLightBlocking")
         .Method<&RigidBody2D::AddForce>("AddForce")
         .Method<&RigidBody2D::Integrate>("Integrate")
@@ -569,6 +573,124 @@ void RegisterLighting(lua_State* L, LightingSystem* lighting, ActorRegistry* act
 }
 
 // =====================================================================
+// TerrainChunk -- pointer type, owned by ActorRegistry. Same shape as
+// LightEmitterConfig: attach via RigidBody2D::terrain (see
+// RegisterRigidBody2D above), consumed every frame by TerrainSystem.
+//
+// Almost the entire surface is mechanical Property<> mapping onto plain
+// public float/int fields, because that's what the config IS. The two
+// exceptions are the same two this file already has elsewhere:
+//   - Colors cross as 3-4 raw scalars, not a userdata (same convention
+//     as Lua_RigidBody2DSetColor and LightEmitterConfig's color), so each
+//     one is a thin wrapper over a shared helper rather than a
+//     Property<>.
+//   - Generate/Update/ResolveBody/SurfaceWorldY all take references to
+//     OTHER bound types (PixelSprite&, RigidBody2D&), which LuaBinding's
+//     Extract<> already handles natively -- so those ARE plain Method<>
+//     bindings despite looking like they'd need trampolines.
+//
+// Note what ISN'T bound: nothing writes m_SurfaceY or the blade list from
+// Lua. Those are generated data derived from `seed` + the sprite's size,
+// and letting a script poke them would let the collision heightmap and
+// the pixels you can see disagree.
+// =====================================================================
+
+int SetTerrainColorField(lua_State* L, Color TerrainChunk::* field) {
+    TerrainChunk* self = LuaBinding::GetSelf<TerrainChunk>(L, 1);
+    (self->*field) = Color(static_cast<float>(luaL_checknumber(L, 2)),
+                           static_cast<float>(luaL_checknumber(L, 3)),
+                           static_cast<float>(luaL_checknumber(L, 4)),
+                           static_cast<float>(luaL_optnumber(L, 5, 1.0)));
+    return 0;
+}
+
+int Lua_TerrainSetDirtDark(lua_State* L)   { return SetTerrainColorField(L, &TerrainChunk::dirtDark); }
+int Lua_TerrainSetDirtLight(lua_State* L)  { return SetTerrainColorField(L, &TerrainChunk::dirtLight); }
+int Lua_TerrainSetRockColor(lua_State* L)  { return SetTerrainColorField(L, &TerrainChunk::rockColor); }
+int Lua_TerrainSetTopsoilColor(lua_State* L) { return SetTerrainColorField(L, &TerrainChunk::topsoilColor); }
+int Lua_TerrainSetGrassDark(lua_State* L)  { return SetTerrainColorField(L, &TerrainChunk::grassDark); }
+int Lua_TerrainSetGrassLight(lua_State* L) { return SetTerrainColorField(L, &TerrainChunk::grassLight); }
+
+void RegisterTerrainChunk(lua_State* L, ActorRegistry* actors) {
+    LuaBinding::Class<TerrainChunk>(L, LuaBinding::MetatableOf<TerrainChunk>::name)
+        // --- surface shape ---
+        .Property<&TerrainChunk::seed>("GetSeed", "SetSeed")
+        .Property<&TerrainChunk::surfaceFrequency>("GetSurfaceFrequency", "SetSurfaceFrequency")
+        .Property<&TerrainChunk::surfaceAmplitude>("GetSurfaceAmplitude", "SetSurfaceAmplitude")
+        .Property<&TerrainChunk::surfaceOctaves>("GetSurfaceOctaves", "SetSurfaceOctaves")
+        .Property<&TerrainChunk::surfaceLacunarity>("GetSurfaceLacunarity", "SetSurfaceLacunarity")
+        .Property<&TerrainChunk::surfaceGain>("GetSurfaceGain", "SetSurfaceGain")
+        .Property<&TerrainChunk::surfaceOffset>("GetSurfaceOffset", "SetSurfaceOffset")
+        // --- dirt ---
+        .Property<&TerrainChunk::dirtFrequency>("GetDirtFrequency", "SetDirtFrequency")
+        .Property<&TerrainChunk::dirtOctaves>("GetDirtOctaves", "SetDirtOctaves")
+        .Property<&TerrainChunk::dirtToneSteps>("GetDirtToneSteps", "SetDirtToneSteps")
+        .Property<&TerrainChunk::rockChance>("GetRockChance", "SetRockChance")
+        .Property<&TerrainChunk::depthDarkening>("GetDepthDarkening", "SetDepthDarkening")
+        .Property<&TerrainChunk::topsoilDepth>("GetTopsoilDepth", "SetTopsoilDepth")
+        .Raw("SetDirtDark", &Lua_TerrainSetDirtDark)
+        .Raw("SetDirtLight", &Lua_TerrainSetDirtLight)
+        .Raw("SetRockColor", &Lua_TerrainSetRockColor)
+        .Raw("SetTopsoilColor", &Lua_TerrainSetTopsoilColor)
+        // --- grass ---
+        .Property<&TerrainChunk::grassMinHeight>("GetGrassMinHeight", "SetGrassMinHeight")
+        .Property<&TerrainChunk::grassMaxHeight>("GetGrassMaxHeight", "SetGrassMaxHeight")
+        .Property<&TerrainChunk::grassDensity>("GetGrassDensity", "SetGrassDensity")
+        .Property<&TerrainChunk::swayAmplitude>("GetSwayAmplitude", "SetSwayAmplitude")
+        .Property<&TerrainChunk::swaySpeed>("GetSwaySpeed", "SetSwaySpeed")
+        .Property<&TerrainChunk::swayPhasePerTexel>("GetSwayPhasePerTexel", "SetSwayPhasePerTexel")
+        .Property<&TerrainChunk::bendStiffness>("GetBendStiffness", "SetBendStiffness")
+        .Property<&TerrainChunk::bendDamping>("GetBendDamping", "SetBendDamping")
+        .Property<&TerrainChunk::maxBend>("GetMaxBend", "SetMaxBend")
+        .Property<&TerrainChunk::disturbStrength>("GetDisturbStrength", "SetDisturbStrength")
+        .Property<&TerrainChunk::disturbPadding>("GetDisturbPadding", "SetDisturbPadding")
+        .Property<&TerrainChunk::disturbSpeedScale>("GetDisturbSpeedScale", "SetDisturbSpeedScale")
+        .Raw("SetGrassDark", &Lua_TerrainSetGrassDark)
+        .Raw("SetGrassLight", &Lua_TerrainSetGrassLight)
+        // --- collision ---
+        .Property<&TerrainChunk::maxStepHeight>("GetMaxStepHeight", "SetMaxStepHeight")
+        // --- lifecycle / queries ---
+        .Method<&TerrainChunk::Generate>("Generate")
+        .Method<&TerrainChunk::ResolveBody>("ResolveBody")
+        .Method<&TerrainChunk::SurfaceWorldY>("SurfaceWorldY")
+        .Method<&TerrainChunk::IsGenerated>("IsGenerated")
+        .Method<&TerrainChunk::GetWidth>("GetWidth")
+        .Method<&TerrainChunk::GetHeight>("GetHeight")
+        .Method<&TerrainChunk::GetBladeCount>("GetBladeCount")
+        .Finish();
+
+    LuaBinding::Table(L).Function<&ActorRegistry::CreateTerrainChunk>("new", actors).Finish("TerrainChunk");
+}
+
+// =====================================================================
+// Terrain -- bare global UpdateTerrain(deltaTime), exactly the same
+// two-upvalue hand-rolled closure UpdateLighting() above uses, for
+// exactly the same reason (needs both the subsystem and the registry it
+// scans, and BindFunction/Table::Function only capture one context
+// pointer).
+//
+// Call this once a frame, AFTER gameplay has moved (so the grass reacts
+// to where the player actually is this frame) and BEFORE
+// UpdateLighting() (so the pixels it just wrote get lit this frame
+// rather than next).
+// =====================================================================
+
+int Lua_UpdateTerrain(lua_State* L) {
+    float dt = static_cast<float>(luaL_checknumber(L, 1));
+    auto* terrain = static_cast<TerrainSystem*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(2)));
+    if (terrain && actors) terrain->Update(*actors, dt);
+    return 0;
+}
+
+void RegisterTerrainSystem(lua_State* L, TerrainSystem* terrain, ActorRegistry* actors) {
+    lua_pushlightuserdata(L, terrain);
+    lua_pushlightuserdata(L, actors);
+    lua_pushcclosure(L, &Lua_UpdateTerrain, 2);
+    lua_setglobal(L, "UpdateTerrain");
+}
+
+// =====================================================================
 // Graphics -- bare globals (SetClearColor(...), not Graphics.SetClearColor),
 // bound to a captured IGraphicsContext*. SetClearColor maps 1:1 onto the
 // C++ method; DrawDebugQuad assembles a Transform2D/Vector2/Color out of
@@ -824,6 +946,8 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterCamera2D(L, context.actors);
     RegisterLightEmitterConfig(L, context.actors);
     RegisterLighting(L, context.lighting, context.actors);
+    RegisterTerrainChunk(L, context.actors);
+    RegisterTerrainSystem(L, context.terrain, context.actors);
     RegisterActorRegistry(L, context.actors);
     RegisterInput(L, context.input);
     RegisterPhysics(L);

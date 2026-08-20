@@ -84,7 +84,20 @@ function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
     if solids then
         for _, solid in ipairs(solids) do
-            self.body:ResolveCollisionWith(solid)
+            -- Two accepted entry shapes, because not everything solid is a
+            -- box any more. A collidable OBJECT (StaticBody, Terrain, ...)
+            -- exposes ResolveAgainst and decides for itself how it's
+            -- shaped -- terrain resolves against its heightmap, a
+            -- StaticBody against its AABB. A bare RigidBody2D still works
+            -- as before for anything that hasn't been wrapped in a class
+            -- yet. Indexing a RigidBody2D userdata for a method it doesn't
+            -- have is safe (its metatable's __index is the method table,
+            -- so this reads nil rather than erroring).
+            if solid.ResolveAgainst then
+                solid:ResolveAgainst(self.body)
+            else
+                self.body:ResolveCollisionWith(solid)
+            end
         end
     end
 end
