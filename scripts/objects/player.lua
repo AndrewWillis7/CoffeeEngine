@@ -121,10 +121,22 @@ function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self:HandleInput()
     self.body:Integrate(deltaTime)
 
-    self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
+        self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())
     if solids then
         for _, solid in ipairs(solids) do
-            self.body:ResolveCollisionWith(solid)
+            -- A level's `solids` list holds wrapper OBJECTS (Terrain,
+            -- StaticBody), not raw bodies, and each one knows how to push
+            -- something out of itself -- box-vs-box for StaticBody, a
+            -- heightmap sweep for Terrain. Dispatching through
+            -- ResolveAgainst is what lets one list hold both without the
+            -- player knowing which kind of ground it's standing on. A raw
+            -- RigidBody2D still works (it's what the list used to hold),
+            -- so an older level script doesn't break.
+            if type(solid) == "table" then
+                if solid.ResolveAgainst then solid:ResolveAgainst(self.body) end
+            else
+                self.body:ResolveCollisionWith(solid)
+            end
         end
     end
 

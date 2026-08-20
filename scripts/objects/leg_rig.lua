@@ -155,6 +155,17 @@ local function placeSegment(body, ax, ay, bx, by)
     body:SetRotation(math.deg(math.atan(-dx / len, dy / len)))
 end
 
+-- A level's `solids` list holds wrapper OBJECTS (Terrain, StaticBody),
+-- not raw bodies. Everything geometric here works off the underlying
+-- RigidBody2D, so unwrap once and keep the wrapper around separately for
+-- the ground query, which DOES care which kind of ground it's looking at.
+-- A raw RigidBody2D passes through untouched, so an older level script
+-- that still builds its list out of `.body`s keeps working.
+local function solidBody(s)
+    if type(s) == "table" then return s.body end
+    return s
+end
+
 -- ---------------------------------------------------------------------
 -- Construction
 -- ---------------------------------------------------------------------
@@ -315,28 +326,50 @@ function LegRig:SampleGround(x, fromY, maxY, solids)
     solids = solids or self.solids
     if not solids then return nil end
 
-    local best = nil
+        local best = nil
     for _, s in ipairs(solids) do
-        if s ~= self.owner then
-            local sx, sy = s:GetPosition()
-            local sw, sh = s:GetSize()
+        local body = solidBody(s)
+        if body and body ~= self.owner then
+            local sx, sy = body:GetPosition()
+            local sw, sh = body:GetSize()
             local left, right = sx - sw * 0.5, sx + sw * 0.5
             local top, bottom = sy - sh * 0.5, sy + sh * 0.5
 
+            -- The X range check matters more than it looks for heightmap
+            -- ground: SurfaceWorldY deliberately CLAMPS an out-of-range X
+            -- to the nearest column (convenient when placing props), so
+            -- without this a foot walking off the end of a chunk would
+            -- keep snapping to the chunk's edge height out over the void.
             if x >= left and x <= right and bottom >= fromY and top <= maxY then
-                local surface = top
-                local sprite = s:GetSprite()
-                if sprite and sw > 0 and sh > 0 then
-                    surface = nil
-                    local tw, th = sprite:GetWidth(), sprite:GetHeight()
-                    local col = math.floor((x - left) / sw * tw)
-                    col = clamp(col, 0, tw - 1)
-                    local startRow = math.floor((math.max(fromY, top) - top) / sh * th)
-                    if startRow < 0 then startRow = 0 end
-                    for row = startRow, th - 1 do
-                        if sprite:IsSolid(col, row) then
-                            surface = top + (row / th) * sh
-                            break
+                local surface
+
+                if type(s) == "table" and s.SurfaceYAt then
+                    -- Heightmap ground -- ask it directly rather than
+                    -- probing its pixels. This returns the top of the
+                    -- DIRT, which is what bodies stand on; the per-pixel
+                    -- path below would plant the foot on a blade of grass
+                    -- instead, because blades are solid pixels in the same
+                    -- sprite and stand up to grassMaxHeight above the real
+                    -- surface. It's also the exact same number
+                    -- TerrainChunk::ResolveBody stands the collider on, so
+                    -- the feet and the body agree by construction instead
+                    -- of by coincidence.
+                    surface = s:SurfaceYAt(x)
+                else
+                    surface = top
+                    local sprite = body:GetSprite()
+                    if sprite and sw > 0 and sh > 0 then
+                        surface = nil
+                        local tw, th = sprite:GetWidth(), sprite:GetHeight()
+                        local col = math.floor((x - left) / sw * tw)
+                        col = clamp(col, 0, tw - 1)
+                        local startRow = math.floor((math.max(fromY, top) - top) / sh * th)
+                        if startRow < 0 then startRow = 0 end
+                        for row = startRow, th - 1 do
+                            if sprite:IsSolid(col, row) then
+                                surface = top + (row / th) * sh
+                                break
+                            end
                         end
                     end
                 end
