@@ -37,6 +37,56 @@ public:
     Color GetPixel(int x, int y) const;
     bool IsSolid(int x, int y) const; // alpha > 0
 
+        // =====================================================================
+    // Raster primitives -- the "author a sprite from code, every frame"
+    // path. SetPixel above is the general primitive, but a procedural rig
+    // (see scripts/objects/leg_rig.lua) redraws a few hundred pixels EVERY
+    // frame, and paying a Lua->C++ call boundary per pixel for that is
+    // both slow and unreadable on the script side. These three do the
+    // whole shape in one call.
+    //
+    // All three write the base buffer AND mirror into the lit buffer, same
+    // as SetPixel, so a redraw is visible immediately even on a pixel no
+    // light happens to touch this frame. All three clamp to bounds rather
+    // than asserting -- a limb solved slightly outside its canvas gets
+    // cropped, not crashed.
+    // =====================================================================
+
+    // Wipes the whole sprite back to transparent (RGBA all zero) and
+    // zeroes the lighting accumulation with it, so the next frame's mix
+    // starts clean instead of carrying weight from a pixel that used to be
+    // solid here. This is the "start a fresh frame of procedural art"
+    // call -- pair it with the DrawLimb/FillRect calls that rebuild the
+    // pose, then let DrawBody's automatic Flush() upload the result.
+    void Clear();
+
+    // Axis-aligned filled rectangle, (x, y) = top-left, fully overwriting
+    // (not blending) whatever was there. This is what draws anything that
+    // must NEVER rotate to stay on the pixel grid -- a knee block, a boot,
+    // a foot.
+    void FillRect(int x, int y, int w, int h, const Color& color);
+
+    // A straight limb segment from (x0, y0) to (x1, y1), `thickness`
+    // texels wide, rasterized as one run per step along the segment's
+    // MAJOR axis: a near-vertical limb gets one horizontal run of
+    // `thickness` texels per row, a near-horizontal one gets one vertical
+    // run per column.
+    //
+    // That major-axis scan is the whole point, and it's why this exists
+    // instead of just rotating a quad: the result is gapless by
+    // construction (exactly one run per row/column, no diagonal pinholes),
+    // its thickness is measured along a grid axis rather than
+    // perpendicular to an arbitrary angle, and every edge lands on a texel
+    // boundary. A rotated quad has none of those properties -- its edges
+    // fall wherever the angle puts them, so the same limb shimmers between
+    // subtly different silhouettes frame to frame as the angle changes.
+    //
+    // Runs are centered by flooring (a run of width w at x covers
+    // x - w/2 .. x - w/2 + w - 1), consistently for every thickness, so
+    // segments of different widths chained end to end (thigh -> shin)
+    // share a center line instead of stepping sideways at the joint.
+    void DrawLimb(int x0, int y0, int x1, int y1, int thickness, const Color& color);
+
     // Sets alpha to 0 for every pixel within radius of (cx, cy) -- the
     // Noita-style "blow a hole in it" primitive. Leaves RGB untouched so a
     // later SetPixel/inspection still sees the original color if alpha

@@ -392,6 +392,45 @@ int Lua_PixelSpriteSetPixel(lua_State* L) {
     return 0;
 }
 
+// sprite:Clear() -- wipe back to transparent. See PixelSprite::Clear.
+int Lua_PixelSpriteClear(lua_State* L) {
+    LuaBinding::GetSelf<PixelSprite>(L, 1)->Clear();
+    return 0;
+}
+
+// sprite:FillRect(x, y, w, h, r, g, b, a) -- (x, y) is the TOP-LEFT, not
+// a center, matching PixelSprite's own (0,0)-is-top-left convention.
+int Lua_PixelSpriteFillRect(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    int x = static_cast<int>(luaL_checknumber(L, 2));
+    int y = static_cast<int>(luaL_checknumber(L, 3));
+    int w = static_cast<int>(luaL_checknumber(L, 4));
+    int h = static_cast<int>(luaL_checknumber(L, 5));
+    float r = static_cast<float>(luaL_checknumber(L, 6));
+    float g = static_cast<float>(luaL_checknumber(L, 7));
+    float b = static_cast<float>(luaL_checknumber(L, 8));
+    float a = static_cast<float>(luaL_optnumber(L, 9, 1.0));
+    self->FillRect(x, y, w, h, Color(r, g, b, a));
+    return 0;
+}
+
+// sprite:DrawLimb(x0, y0, x1, y1, thickness, r, g, b, a) -- the
+// on-the-grid replacement for rotating a quad. See PixelSprite::DrawLimb.
+int Lua_PixelSpriteDrawLimb(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    int x0 = static_cast<int>(luaL_checknumber(L, 2));
+    int y0 = static_cast<int>(luaL_checknumber(L, 3));
+    int x1 = static_cast<int>(luaL_checknumber(L, 4));
+    int y1 = static_cast<int>(luaL_checknumber(L, 5));
+    int thickness = static_cast<int>(luaL_checknumber(L, 6));
+    float r = static_cast<float>(luaL_checknumber(L, 7));
+    float g = static_cast<float>(luaL_checknumber(L, 8));
+    float b = static_cast<float>(luaL_checknumber(L, 9));
+    float a = static_cast<float>(luaL_optnumber(L, 10, 1.0));
+    self->DrawLimb(x0, y0, x1, y1, thickness, Color(r, g, b, a));
+    return 0;
+}
+
 int Lua_PixelSpriteIsSolid(lua_State* L) {
     PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
     int x = static_cast<int>(luaL_checknumber(L, 2));
@@ -408,6 +447,9 @@ void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
         .Raw("PunchCircle", &Lua_PixelSpritePunchCircle)
         .Raw("SetPixel", &Lua_PixelSpriteSetPixel)
         .Raw("IsSolid", &Lua_PixelSpriteIsSolid)
+        .Raw("Clear", &Lua_PixelSpriteClear)
+        .Raw("FillRect", &Lua_PixelSpriteFillRect)
+        .Raw("DrawLimb", &Lua_PixelSpriteDrawLimb)
         .Finish();
 
     LuaBinding::Table(L)

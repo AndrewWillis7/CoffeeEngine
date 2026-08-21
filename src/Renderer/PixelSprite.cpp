@@ -81,6 +81,81 @@ bool PixelSprite::IsSolid(int x, int y) const {
     return m_Pixels[(static_cast<size_t>(y) * m_Width + x) * 4 + 3] > 0;
 }
 
+void PixelSprite::Clear() {
+    if (m_Pixels.empty()) return;
+
+    std::fill(m_Pixels.begin(), m_Pixels.end(), static_cast<unsigned char>(0));
+    std::fill(m_LitPixels.begin(), m_LitPixels.end(), static_cast<unsigned char>(0));
+    // Lighting accumulation goes with it: a texel that was solid last
+    // frame and is empty now must not hand its leftover weight to whatever
+    // gets drawn there next frame (see AccumulateLightTint's mix math).
+    std::fill(m_LightAccumColor.begin(), m_LightAccumColor.end(), 0.0f);
+    std::fill(m_LightAccumWeight.begin(), m_LightAccumWeight.end(), 0.0f);
+
+    MarkDirty(0, 0, m_Width, m_Height);
+}
+
+void PixelSprite::FillRect(int x, int y, int w, int h, const Color& color) {
+    if (w <= 0 || h <= 0) return;
+
+    int minX = std::max(0, x);
+    int minY = std::max(0, y);
+    int maxX = std::min(m_Width - 1, x + w - 1);
+    int maxY = std::min(m_Height - 1, y + h - 1);
+    if (minX > maxX || minY > maxY) return; // fully off-sprite
+
+    unsigned char rgba[4] = {
+        static_cast<unsigned char>(std::clamp(color.r, 0.0f, 1.0f) * 255.0f),
+        static_cast<unsigned char>(std::clamp(color.g, 0.0f, 1.0f) * 255.0f),
+        static_cast<unsigned char>(std::clamp(color.b, 0.0f, 1.0f) * 255.0f),
+        static_cast<unsigned char>(std::clamp(color.a, 0.0f, 1.0f) * 255.0f),
+    };
+
+    for (int py = minY; py <= maxY; ++py) {
+        size_t i = (static_cast<size_t>(py) * m_Width + minX) * 4;
+        for (int px = minX; px <= maxX; ++px, i += 4) {
+            std::memcpy(m_Pixels.data() + i, rgba, 4);
+            std::memcpy(m_LitPixels.data() + i, rgba, 4);
+        }
+    }
+    MarkDirty(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+void PixelSprite::DrawLimb(int x0, int y0, int x1, int y1, int thickness, const Color& color) {
+    if (thickness < 1) thickness = 1;
+
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int steps = std::max(std::abs(dx), std::abs(dy));
+
+    // Degenerate (both endpoints in the same texel) -- still draw the one
+    // run, so a zero-length module doesn't silently vanish.
+    if (steps == 0) {
+        FillRect(x0 - thickness / 2, y0, thickness, 1, color);
+        return;
+    }
+
+    // Integer-rational interpolation rather than a float accumulator: the
+    // minor coordinate is recomputed from `i` every step, so it can't
+    // drift, and the same endpoints always produce bit-identical runs.
+    // That exactness is what stops a held pose from shimmering.
+    if (std::abs(dy) >= std::abs(dx)) {
+        int stepY = (dy > 0) ? 1 : -1;
+        for (int i = 0; i <= steps; ++i) {
+            int py = y0 + stepY * i;
+            int px = x0 + static_cast<int>(std::lround(static_cast<double>(dx) * i / steps));
+            FillRect(px - thickness / 2, py, thickness, 1, color);
+        }
+    } else {
+        int stepX = (dx > 0) ? 1 : -1;
+        for (int i = 0; i <= steps; ++i) {
+            int px = x0 + stepX * i;
+            int py = y0 + static_cast<int>(std::lround(static_cast<double>(dy) * i / steps));
+            FillRect(px, py - thickness / 2, 1, thickness, color);
+        }
+    }
+}
+
 void PixelSprite::PunchCircle(int cx, int cy, float radius) {
     int minX = std::max(0, static_cast<int>(std::floor(cx - radius)));
     int maxX = std::min(m_Width - 1, static_cast<int>(std::ceil(cx + radius)));

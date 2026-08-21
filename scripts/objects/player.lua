@@ -50,8 +50,18 @@ function Player.new(x, y, w, h, legConfig)
     local self = LegRig.new(legConfig)
     setmetatable(self, Player)
 
-    local standHeight = math.min(self:GetStandHeight(), h - 1)
-    local torsoHeight = math.max(1, math.floor(h - standHeight + 0.5))
+    local standHeight = math.min(self:GetStandHeight(), h - 2)
+    local torsoHeight = math.max(2, math.floor(h - standHeight + 0.5))
+
+    -- Torso height is forced EVEN, which is not cosmetic. hipLocalY below
+    -- is torsoHeight / 2, and LegRig anchors its leg canvas to the owner's
+    -- center by that offset; an odd torso puts the hip -- and therefore
+    -- the canvas's whole pixel grid -- half a texel off the torso's own,
+    -- so the two would round to different texels under quad.vert's
+    -- u_PixelSnap and the hip seam would crawl as the player walks. See
+    -- LegRig:BuildCanvases' even-size comment for the other half of this.
+    torsoHeight = torsoHeight - (torsoHeight % 2)
+    if torsoHeight < 2 then torsoHeight = 2 end
     standHeight = h - torsoHeight
 
     self.body = RigidBody2D.new(x, y, w, torsoHeight)
@@ -65,8 +75,8 @@ function Player.new(x, y, w, h, legConfig)
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2, 0, standHeight / 2))
 
     self.config = PlayerActorConfig.new()
-    self.config:SetMoveSpeed(75)
-    self.config:SetJumpForce(200)
+    self.config:SetMoveSpeed(25)
+    self.config:SetJumpForce(350)
     self.body:SetPlayerConfig(self.config)
 
     -- Hips at the torso's bottom edge; feet then land exactly on the
@@ -146,12 +156,19 @@ function Player:Update(deltaTime, solids, worldWidth, worldHeight)
     self:UpdateLegs(deltaTime, solids)
 end
 
--- Far leg, torso, near leg -- the shade multiplier on the back leg (see
--- LegRig.Defaults.legs) plus this ordering is what sells the depth
--- without a second set of art or any z-buffer.
 function Player:Draw()
     self:DrawLegs("back")
-    DrawBody(self.body)
+
+    local bob = self:GetBobOffset()
+    if bob ~= 0 then
+        local x, y = self.body:GetPosition()
+        self.body:SetPosition(x, y + bob)
+        DrawBody(self.body)
+        self.body:SetPosition(x, y)
+    else
+        DrawBody(self.body)
+    end
+
     self:DrawLegs("front")
 end
 

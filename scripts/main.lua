@@ -18,11 +18,17 @@ function Init()
     -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
     -- above the floor's open left end and falls onto it.
     player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, {
-        legging = { width = 4, height = 11, color = {0.36, 0.24, 0.52} },
-        knee    = { width = 5, height = 3,  color = {0.22, 0.14, 0.30} },
-        boot    = { width = 6, height = 4,  color = {0.10, 0.09, 0.12} },
-        stride  = 22,
+        legging = { width = 2, height = 8, color = {0.8157, 0.7647, 0.6980} },
+        knee    = { width = 3, height = 2,  color = {0.4196, 0.3608, 0.3137} },
+        boot    = { width = 3, height = 6,  color = {0.4196, 0.3608, 0.3137} },
+        foot    = { width = 4, height = 2,  color = {0.2314, 0.2588, 0.3216} },
+        stand   = 0.95,
+        stride  = 18,
         stepHeight = 4,
+        stanceRatio = 0.58,
+        swingFrames = 12,
+        snapDistance = 12,
+        bob = 1
     })
 
     -- The ground. Replaces the old flat 1000x15 StaticBody floor
@@ -46,11 +52,12 @@ function Init()
     -- piece of ground; change nothing and it regenerates identically
     -- across hot-reloads.
     terrain = Terrain.new(160, 156, 320, 48, {
-        seed = 1,
-        surfaceAmplitude = 9,
-        surfaceOffset = 16,
-        surfaceFrequency = 0.03,
-        grassDensity = 0.85,
+        seed = 76,
+        surfaceAmplitude = 5,
+        surfaceOffset = 28,
+        surfaceFrequency = 0.02,
+        grassDensity = 0.75,
+        grassMaxHeight = 7
     })
 
         -- Its Y is no longer a hand-computed constant: the ground is uneven

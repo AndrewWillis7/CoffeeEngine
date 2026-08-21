@@ -298,6 +298,42 @@ function PixelSprite:SetPixel(x, y, r, g, b, a) end
 ---@return boolean
 function PixelSprite:IsSolid(x, y) end
 
+--- Wipes the whole sprite back to transparent and clears its lighting
+--- accumulation with it. The "start a fresh frame of procedural art"
+--- call -- pair with FillRect/DrawLimb below.
+function PixelSprite:Clear() end
+
+--- Axis-aligned filled rectangle; (x, y) is the TOP-LEFT, not a center.
+--- Overwrites rather than blends. Use this for anything that must never
+--- rotate to stay on the pixel grid -- a knee cap, a boot, a foot.
+---@param x integer Left edge
+---@param y integer Top edge
+---@param w integer
+---@param h integer
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil Defaults to 1.0
+function PixelSprite:FillRect(x, y, w, h, r, g, b, a) end
+
+--- A straight limb segment `thickness` texels wide, rasterized as one
+--- run per step along the segment's MAJOR axis (horizontal runs per row
+--- for a near-vertical limb). Gapless by construction, thickness
+--- measured along a grid axis, every edge on a texel boundary -- the
+--- on-the-grid replacement for rotating a quad. Runs are floor-centered
+--- consistently for every thickness, so segments of different widths
+--- chained end to end share a center line.
+---@param x0 integer
+---@param y0 integer
+---@param x1 integer
+---@param y1 integer
+---@param thickness integer Texels, minimum 1
+---@param r number
+---@param g number
+---@param b number
+---@param a number|nil Defaults to 1.0
+function PixelSprite:DrawLimb(x0, y0, x1, y1, thickness, r, g, b, a) end
+
 ---@class Sprite
 Sprite = {}
 

@@ -1,22 +1,71 @@
 -- Procedural two-bone leg rig -- the shared "legs" component for the
--- player AND every NPC. Owns nothing but its own segment bodies; the
--- OWNER body (torso) is passed in via SetOwner and is never moved by
--- this class -- legs follow the torso, they don't drive it.
+-- player AND every NPC. Owns nothing but its own leg CANVAS; the OWNER
+-- body (torso) is passed in via SetOwner and is never moved by this
+-- class -- legs follow the torso, they don't drive it.
 --
--- Each leg is three drawn modules along one chain:
+-- Each leg is four drawn modules along one chain:
 --
 --     hip  o
 --          |  legging   (upper leg -- width/height/color)
---     knee =            (joint spacer -- width/height/color)
---           \  boot     (lower leg + foot -- width/height/color)
---            o  foot   <- ground-snapped
+--     knee []           (joint cap -- width/height/color, ALWAYS
+--           \            axis-aligned, never rotated)
+--            \  boot    (lower leg -- width/height/color)
+--     ankle   o
+--            [==]  foot (axis-aligned block, points the way we face)
 --
 -- IK is closed-form two-bone (law of cosines): L1 = legging.height +
--- knee.height, L2 = boot.height. The knee spacer rides on the END of
--- the upper bone and is oriented along it, so raising knee.height
--- pushes the bend point further down the leg -- that's the "leg format"
--- knob (short-shin digitigrade vs. long-shin human vs. no knee at all
--- when knee.height = 0).
+-- knee.height, L2 = boot.height, solving hip -> ANKLE. The foot hangs
+-- below the ankle as a rigid block, so `leg.length` (hip -> sole, what
+-- decides stand height) is L1 + L2 + foot.height. The knee cap rides on
+-- the END of the upper bone, so raising knee.height pushes the bend
+-- point further down the leg -- that's the "leg format" knob
+-- (short-shin digitigrade vs. long-shin human vs. no cap at all when
+-- knee.height = 0).
+--
+-- =====================================================================
+-- ON-GRID RENDERING -- why there are no rotated quads here anymore
+-- =====================================================================
+-- The previous version gave every module its own RigidBody2D and set
+-- transform.rotation to aim it down the bone. That is geometrically
+-- correct and looks wrong: a rotated quad's edges land wherever the
+-- angle puts them, at whatever subpixel offset, so a 4-texel-wide thigh
+-- rendered at 17 degrees is a smear whose silhouette changes shape every
+-- frame the angle drifts, and the joints leave visible pinholes where
+-- two differently-rotated quads meet. On a 320x180 stage where one texel
+-- is a deliberate, visible unit, that reads as mush.
+--
+-- Instead the whole rig rasterizes itself into ONE axis-aligned
+-- PixelSprite canvas per draw layer, every frame the pose changes, via
+-- PixelSprite::DrawLimb/FillRect (see their comments in PixelSprite.h).
+-- Consequences, all of them good:
+--
+--   * Every leg pixel IS a texel. Nothing is ever sampled at an angle,
+--     so a held pose is bit-identical frame to frame -- no shimmer.
+--   * Joints are integers. The hip, knee, ankle and sole are rounded to
+--     whole texels RELATIVE TO THE HIP before anything is drawn, so the
+--     staircase a diagonal bone makes is stable instead of crawling.
+--   * The foot never rotates. It's an axis-aligned block, which is what
+--     every hand-drawn pixel-art character does and is most of why this
+--     reads as a character rather than a linkage.
+--   * Six rotated bodies collapse into (at most) two unrotated ones.
+--     That's 6 draw calls -> 2, and it takes LightingSystem off its
+--     per-pixel Rotated() path (see the "unrotated fast path" comments
+--     in WorldToPixel/PixelToWorld) for every lit leg pixel.
+--   * The canvas is only re-rasterized when the INTEGER pose actually
+--     changes (see the dirty check in UpdateLegs). Standing still costs
+--     nothing at all; walking skips a good share of frames for free,
+--     because quantizing to texels is exactly what makes consecutive
+--     frames identical. Measured at ~30% of canvas-frames skipped while
+--     walking without pause, 100% while standing.
+--
+-- TRADEOFF, stated plainly: joints are snapped relative to the HIP, not
+-- to absolute world coordinates. That keeps the legs welded to the torso
+-- under quad.vert's u_PixelSnap (both are offset from the same body
+-- position, so they round together and the hip seam can never split),
+-- at the cost of a planted foot occasionally shifting one texel as the
+-- body crosses a texel boundary. The other way round -- snapping feet to
+-- the world grid -- makes the LEGS slip a texel against the TORSO
+-- instead, which is far more visible. Feet win.
 
 local Class = require("core.Class")
 
@@ -24,7 +73,7 @@ local LegRig = Class()
 
 -- ---------------------------------------------------------------------
 -- Tunables. Every one of these is overridable per-rig via the config
--- table passed to LegRig.new(), and the three modules are additionally
+-- table passed to LegRig.new(), and the four modules are additionally
 -- overridable PER LEG (see Defaults.legs below) so a limping NPC or an
 -- asymmetric creature doesn't need a second rig class.
 -- ---------------------------------------------------------------------
@@ -32,6 +81,12 @@ LegRig.Defaults = {
     legging = { width = 5, height = 9, color = {0.30, 0.33, 0.50} },
     knee    = { width = 5, height = 2, color = {0.20, 0.22, 0.34} },
     boot    = { width = 6, height = 5, color = {0.14, 0.12, 0.16} },
+
+    -- The foot. Height 0 removes it entirely (the boot then ends at the
+    -- ground, like the old rig did). Its color defaults to the boot's, so
+    -- an existing config that never heard of feet still gets a sensible
+    -- one instead of a mismatched block.
+    foot    = { width = 7, height = 2 },
 
     -- Fraction of full leg length the hip rests at while standing. 1.0
     -- means the leg is dead straight when grounded on flat terrain --
@@ -42,16 +97,52 @@ LegRig.Defaults = {
     stand = 0.88,
 
     -- World distance travelled per FULL gait cycle (both legs step
-    -- once). The per-foot sweep amplitude is derived from this
-    -- (stride/4, see UpdateLegs) rather than configured separately,
+    -- once). The per-foot sweep amplitude is DERIVED from this and
+    -- stanceRatio (see UpdateLegs) rather than configured separately,
     -- because that exact ratio is what makes a planted foot hold still
-    -- in WORLD space while the body moves over it -- any other
-    -- amplitude and the feet visibly ice-skate.
+    -- in WORLD space while the body moves over it -- any other amplitude
+    -- and the feet visibly ice-skate.
     stride = 20,
+
+    -- Fraction of the cycle each foot spends PLANTED. 0.5 is the
+    -- degenerate case: one foot lifts the exact instant the other lands,
+    -- so the character is never on two feet and the walk reads as a
+    -- rocking limp. Real gaits overlap; anything above 0.5 buys a
+    -- double-support window where both feet are down, which is what
+    -- makes a walk look planted rather than tippy. Feeds the sweep
+    -- amplitude, so raising it lengthens each step to match -- see
+    -- UpdateLegs.
+    stanceRatio = 0.58,
+
+    -- Number of discrete poses the SWINGING (airborne) foot is allowed
+    -- to occupy on its way forward. This is the "hand-animated" knob:
+    -- a continuously interpolated swing slides the foot through every
+    -- subpixel position between the two steps, which on a chunky pixel
+    -- grid reads as a foot melting forward. Snapping it to a handful of
+    -- poses gives the crisp pop between keyframes that drawn sprite
+    -- animation has. Only the SWING is quantized -- stance stays exactly
+    -- linear, because that's the half of the cycle the no-slide math
+    -- above depends on. 0 disables it (fully continuous swing).
+    swingFrames = 4,
 
     stepHeight = 3,   -- peak lift of a swinging foot, texels
     idleSpeed  = 4,   -- |vx| below this counts as standing still
     gaitBlend  = 8,   -- how fast the walk cycle fades in/out
+
+    -- Peak rise of the HIPS at mid-stance, in whole texels. Driven off
+    -- the swinging foot's own lift rather than a second hand-tuned
+    -- phase offset -- one foot is at the top of its arc exactly when the
+    -- other is straight underneath the body, which is exactly when a
+    -- real walk is at its tallest, so the two are the same number. Whole
+    -- texels only (it is rounded): a fractional bob would put the torso
+    -- on a different subpixel offset from the legs every frame, which is
+    -- the shimmer this whole file exists to avoid. 0 disables it.
+    bob = 1,
+
+    -- How far forward of the ankle the foot block sits, texels. 0
+    -- centers it (a boot-shaped stump); 1-2 gives a toe that reads as a
+    -- direction the character is facing even when it's standing still.
+    footLean = 1,
 
     -- How fast a foot eases across a DISCONTINUITY -- a step up onto a
     -- ledge, a facing flip, landing after a jump. Deliberately NOT a lag
@@ -76,23 +167,53 @@ LegRig.Defaults = {
 
     -- hipX is in LOCAL texels and is mirrored by facing. phase offsets
     -- the leg in the gait cycle (0.5 = perfectly opposed). layer picks
-    -- which side of the torso it draws on, shade is a flat multiplier
+    -- which canvas -- and therefore which side of the torso -- it draws
+    -- on, shade is a flat multiplier BAKED INTO THE RASTERIZED PIXELS
+    -- (not the body tint, which would apply to a whole canvas at once)
     -- that fakes depth on the far leg without a second set of art.
+    --
+    -- shade multiplies toward BLACK, so how far it can be pushed depends
+    -- on how dark the modules already are: on an unlit night stage a
+    -- 0.62 shade over an already-dark boot took the far leg below the
+    -- background and it stopped reading as a leg at all. 0.70 is enough
+    -- separation to sell the depth while keeping the far leg visible.
+    --
+    -- The two stock legs are offset one texel each way rather than
+    -- sharing a hip. With both at hipX = 0 the sweep is the ONLY thing
+    -- separating them, so the moment the character stops walking the two
+    -- legs converge to the identical solved pose and the silhouette
+    -- collapses to a single leg -- the idle pose was the one place the
+    -- rig looked broken. Two texels of permanent stagger costs nothing
+    -- while walking (each leg just plants a texel off center) and gives
+    -- a standing character a stance.
     legs = {
-        { hipX = 0, phase = 0.0, layer = "front", shade = 1.00 },
-        { hipX = 0, phase = 0.5, layer = "back",  shade = 0.62 },
+        { hipX =  1, phase = 0.0, layer = "front", shade = 1.00 },
+        { hipX = -1, phase = 0.5, layer = "back",  shade = 0.70 },
     },
 }
 
-local PART_ORDER = { "legging", "knee", "boot" }
+-- Back first: the owner draws its torso between the two (see
+-- Player:Draw), so this is literally far-side-to-near-side.
+local LAYER_ORDER = { "back", "front" }
 
 -- ---------------------------------------------------------------------
 -- Local helpers
 -- ---------------------------------------------------------------------
 
+local floor, sqrt, abs, exp = math.floor, math.sqrt, math.abs, math.exp
+local sin, pi, max = math.sin, math.pi, math.max
+
 local function clamp(v, lo, hi)
     if v < lo then return lo elseif v > hi then return hi end
     return v
+end
+
+-- Round-half-up to a whole texel. Deliberately the SAME rule
+-- quad.vert's u_PixelSnap uses (floor(x + 0.5)) so a position computed
+-- here and a position snapped by the vertex stage never disagree about
+-- which texel they mean.
+local function round(v)
+    return floor(v + 0.5)
 end
 
 -- Framerate-independent exponential approach -- same shape as
@@ -101,7 +222,7 @@ end
 -- high rate/low framerate, oscillates) once rate * dt > 1.
 local function approach(current, target, rate, dt)
     if rate <= 0 then return target end
-    return current + (target - current) * (1.0 - math.exp(-rate * dt))
+    return current + (target - current) * (1.0 - exp(-rate * dt))
 end
 
 local function pick(a, b)
@@ -109,19 +230,18 @@ local function pick(a, b)
     return a
 end
 
--- Rounds to a whole texel -- every module is authored as a real
--- PixelSprite, and Sprite.NewSolid takes integers. Sizes that came out
--- of arithmetic (a designer scaling a creature by 1.3) have to land on
--- the grid before they get here.
+-- Rounds to a whole texel -- every module is rasterized as whole texels,
+-- so sizes that came out of arithmetic (a designer scaling a creature by
+-- 1.3) have to land on the grid before they get here.
 local function texels(v, minimum)
-    v = math.floor((v or 0) + 0.5)
+    v = floor((v or 0) + 0.5)
     if v < minimum then v = minimum end
     return v
 end
 
-local function makeModule(src, def)
+local function makeModule(src, def, fallbackColor)
     src = src or {}
-    local c = src.color or def.color
+    local c = src.color or def.color or fallbackColor or {1, 1, 1, 1}
     return {
         width  = texels(pick(src.width,  def.width),  1),
         height = texels(pick(src.height, def.height), 0), -- 0 = module omitted
@@ -129,30 +249,36 @@ local function makeModule(src, def)
     }
 end
 
--- p in [0,1). First half is SWING (foot off the ground, travelling
--- forward), second half is STANCE (foot planted, sweeping backward
--- under the body). Returns sweep in [-1,1] and lift in [0,1].
-local function gaitPose(p)
-    if p < 0.5 then
-        local t = p / 0.5
-        return -1.0 + 2.0 * t, math.sin(math.pi * t)
-    end
-    local t = (p - 0.5) / 0.5
-    return 1.0 - 2.0 * t, 0.0
-end
+-- p in [0,1). The first (1 - stanceRatio) of the cycle is SWING (foot
+-- off the ground, travelling forward), the rest is STANCE (foot planted,
+-- sweeping backward under the body). Returns sweep in [-1,1] and lift in
+-- [0,1].
+--
+-- STANCE IS EXACTLY LINEAR and must stay that way -- it's the half of
+-- the cycle where the foot is touching the world, and any easing there
+-- turns into visible sliding. All the shaping lives in the swing, where
+-- the foot is in the air and nothing can betray it:
+--   * sweep is smoothstepped, so the foot leaves the ground and arrives
+--     at its next plant gently instead of at a constant conveyor speed.
+--   * lift peaks at ~40% rather than dead center, so the foot snaps up
+--     off the ground and floats down onto it -- a flat landing reads as
+--     weight, a symmetric arc reads as a pendulum.
+local function gaitPose(p, stanceRatio, swingFrames)
+    local swingSpan = 1.0 - stanceRatio
+    if swingSpan <= 0.0 then return 1.0 - 2.0 * p, 0.0 end
 
--- Places a segment body so its LOCAL +Y axis runs from a -> b. The
--- shared vertex stage (scripts/shaders/quad.vert) rotates local corners
--- by the standard matrix in a y-down space, so local +Y maps to
--- (-sin, cos) -- hence atan(-dx, dy) rather than the usual atan(dy, dx).
--- Rotation crosses the Lua boundary in DEGREES (see
--- Lua_RigidBody2DSetRotation).
-local function placeSegment(body, ax, ay, bx, by)
-    local dx, dy = bx - ax, by - ay
-    local len = math.sqrt(dx * dx + dy * dy)
-    if len < 1e-5 then dx, dy, len = 0.0, 1.0, 1.0 end
-    body:SetPosition((ax + bx) * 0.5, (ay + by) * 0.5)
-    body:SetRotation(math.deg(math.atan(-dx / len, dy / len)))
+    if p < swingSpan then
+        local t = p / swingSpan
+        if swingFrames and swingFrames > 0 then
+            -- Quantize to discrete keyframes -- see Defaults.swingFrames.
+            t = floor(t * swingFrames + 0.5) / swingFrames
+        end
+        local eased = t * t * (3.0 - 2.0 * t)
+        return -1.0 + 2.0 * eased, sin(pi * (t ^ 0.8))
+    end
+
+    local t = (p - swingSpan) / stanceRatio
+    return 1.0 - 2.0 * t, 0.0
 end
 
 -- A level's `solids` list holds wrapper OBJECTS (Terrain, StaticBody),
@@ -183,8 +309,8 @@ end
 -- Split out from new() so a subclass can build ITS part first and then
 -- initialize the inherited leg part onto the same table -- see
 -- objects/player.lua. Safe to call again to rebuild the rig from a new
--- config (the old segment bodies are dropped; ActorRegistry owns them
--- and reclaims them on the next hot-reload).
+-- config (the old canvas bodies/sprites are dropped; ActorRegistry owns
+-- them and reclaims them on the next hot-reload).
 function LegRig:InitLegRig(config)
     if config == false then config = { legs = {} } end
     config = config or {}
@@ -193,6 +319,8 @@ function LegRig:InitLegRig(config)
 
     self.stand        = pick(config.stand, D.stand)
     self.stride       = pick(config.stride, D.stride)
+    self.stanceRatio  = clamp(pick(config.stanceRatio, D.stanceRatio), 0.05, 0.95)
+    self.swingFrames  = pick(config.swingFrames, D.swingFrames)
     self.stepHeight   = pick(config.stepHeight, D.stepHeight)
     self.idleSpeed    = pick(config.idleSpeed, D.idleSpeed)
     self.gaitBlendRate= pick(config.gaitBlend, D.gaitBlend)
@@ -200,17 +328,23 @@ function LegRig:InitLegRig(config)
     self.snapDistance = pick(config.snapDistance, D.snapDistance)
     self.airTuck      = pick(config.airTuck, D.airTuck)
     self.airReach     = pick(config.airReach, D.airReach)
+    self.bob          = texels(pick(config.bob, D.bob), 0)
+    self.footLean     = texels(pick(config.footLean, D.footLean), 0)
 
     local baseModules = {
         legging = makeModule(config.legging, D.legging),
         knee    = makeModule(config.knee,    D.knee),
         boot    = makeModule(config.boot,    D.boot),
     }
+    -- Feet inherit the boot's color by default, so a pre-foot config
+    -- (main.lua's player, every existing NPC) grows a matching one.
+    baseModules.foot = makeModule(config.foot, D.foot, baseModules.boot.color)
     self.modules = baseModules
 
     self.phase = 0.0
     self.blend = 0.0
     self.facing = 1
+    self.bobY = 0
     self.owner = nil
     self.hipLocalY = 0.0
     self.solids = nil
@@ -218,24 +352,34 @@ function LegRig:InitLegRig(config)
     self.legs = {}
     local legDefs = config.legs or D.legs
     for i, def in ipairs(legDefs) do
+        local m = {
+            legging = def.legging and makeModule(def.legging, baseModules.legging) or baseModules.legging,
+            knee    = def.knee    and makeModule(def.knee,    baseModules.knee)    or baseModules.knee,
+            boot    = def.boot    and makeModule(def.boot,    baseModules.boot)    or baseModules.boot,
+        }
+        m.foot = def.foot and makeModule(def.foot, baseModules.foot, m.boot.color) or baseModules.foot
+
         local leg = {
-            hipX  = def.hipX or 0,
+            hipX  = texels(def.hipX or 0, -1e9),
             phase = def.phase or ((i - 1) / #legDefs),
             layer = def.layer or "front",
             shade = def.shade or 1.0,
             -- +1 bends the knee toward the facing direction (forward,
             -- like a human); -1 bends it backward (like a bird's ankle).
             bend  = def.bend or 1,
-            modules = {
-                legging = def.legging and makeModule(def.legging, baseModules.legging) or baseModules.legging,
-                knee    = def.knee    and makeModule(def.knee,    baseModules.knee)    or baseModules.knee,
-                boot    = def.boot    and makeModule(def.boot,    baseModules.boot)    or baseModules.boot,
-            },
+            modules = m,
             footX = nil, footY = nil,
         }
-        leg.length = leg.modules.legging.height + leg.modules.knee.height + leg.modules.boot.height
+
+        -- L1/L2 are the IK bones (hip -> knee -> ANKLE). `length` is the
+        -- full hip -> SOLE reach, which is what stand height and the
+        -- ground clamp care about, and includes the rigid foot block.
+        leg.L1 = m.legging.height + m.knee.height
+        leg.L2 = m.boot.height
+        leg.chain = leg.L1 + leg.L2
+        leg.length = leg.chain + m.foot.height
+
         self.legs[i] = leg
-        self:BuildLegParts(i)
     end
 
     -- The rig's reach is the SHORTEST leg's -- that's the one that
@@ -250,25 +394,114 @@ function LegRig:InitLegRig(config)
     -- height to size its torso, and a fractional value there means a
     -- fractional torso sprite, which Sprite.NewSolid can't author.
     self.standHeight = texels(self.legLength * self.stand, 0)
+
+    self:BuildCanvases()
 end
 
-function LegRig:BuildLegParts(index)
-    local leg = self.legs[index]
-    leg.parts = {}
-    for _, name in ipairs(PART_ORDER) do
-        local m = leg.modules[name]
-        if m.height > 0 then
-            -- Each leg gets its OWN sprite even when two legs share
-            -- identical module settings -- LightingSystem writes its
-            -- per-pixel lit overlay into the PixelSprite itself, so a
-            -- shared sprite would mean the second leg's lighting
-            -- overwrites the first's every frame.
-            local sprite = Sprite.NewSolid(m.width, m.height, m.color[1], m.color[2], m.color[3], m.color[4])
-            local body = RigidBody2D.new(0, 0, m.width, m.height)
+-- ---------------------------------------------------------------------
+-- Canvas allocation
+-- ---------------------------------------------------------------------
+
+-- How far sideways off the hip->ankle line the knee can ever swing, in
+-- texels. The knee is the apex of a triangle with sides L1, L2 and base
+-- d, so its offset is 2 * area / d -- a smooth function of d with an
+-- interior maximum, which means the closed-form bound (L1 * L2 /
+-- |L1 - L2|, the right-angled case at the shortest possible base) is
+-- correct but loose: for the stock player it overestimates by more than
+-- half. Since d is confined to a known interval -- the target clamp in
+-- UpdateLegs never lets a sole rise above quarter extension, and the IK
+-- can't reach past L1 + L2 -- just SAMPLE the function across that
+-- interval and take the real peak. This runs once, at rig construction,
+-- and every texel it saves is a texel the lighting pass doesn't walk on
+-- every light, every frame.
+local function KneeBulge(leg)
+    local L1, L2 = leg.L1, leg.L2
+    if L1 <= 0 or L2 <= 0 then return 0.0 end
+
+    local dMin = max(abs(L1 - L2), leg.length * 0.25 - leg.modules.foot.height)
+    local dMax = L1 + L2
+    if dMax <= dMin then return 0.0 end
+
+    local peak = 0.0
+    local samples = 64
+    for i = 0, samples do
+        local d = dMin + (dMax - dMin) * (i / samples)
+        if d > 1e-5 then
+            local a = (L1 * L1 - L2 * L2 + d * d) / (2.0 * d)
+            local hh = L1 * L1 - a * a
+            if hh > 0.0 then
+                local bulge = sqrt(hh)
+                if bulge > peak then peak = bulge end
+            end
+        end
+    end
+    return peak
+end
+
+-- One PixelSprite per draw layer that actually has legs on it, sized
+-- once here to the worst-case footprint the solver can produce, and
+-- reused forever after (nothing below ever reallocates).
+--
+-- WIDTH is the interesting one. A leg reaches sideways by three
+-- independent amounts that all stack: the gait's own sweep, the knee's
+-- sideways bulge when the leg folds, and half the widest module. The
+-- bulge is measured rather than bounded -- see KneeBulge above.
+--
+-- BOTH DIMENSIONS ARE FORCED EVEN, and that is load-bearing rather than
+-- tidiness: the canvas body is centered on the owner's position, so its
+-- left/top edge sits at (owner center - size/2). An odd size puts that
+-- edge on a half-texel, which offsets the canvas's whole pixel grid half
+-- a texel from the torso's -- so the two would sample against different
+-- grids and the hip seam would crawl. Even sizes keep both on the same
+-- one. (Same reason SetOwner rounds hipLocalY.)
+function LegRig:BuildCanvases()
+    self.canvases = {}
+    if #self.legs == 0 then
+        self.canvasW, self.canvasH, self.baseHipRow, self.canvasOffY = 0, 0, 0, 0
+        return
+    end
+
+    local maxAmp = self.stride * self.stanceRatio * 0.5
+    local halfW, maxLen = 0, 0
+
+    for _, leg in ipairs(self.legs) do
+        local m = leg.modules
+        local widest = max(m.legging.width, m.knee.width, m.boot.width, m.foot.width)
+        local reach = abs(leg.hipX) + maxAmp + KneeBulge(leg) + widest * 0.5 + self.footLean + 1
+        if reach > halfW then halfW = reach end
+        if leg.length > maxLen then maxLen = leg.length end
+    end
+
+    local w = math.ceil(halfW) * 2
+    if w % 2 == 1 then w = w + 1 end
+
+    -- baseHipRow leaves room ABOVE the hip for the bob to raise it into;
+    -- rows below run to hip + full extension, which the target clamp in
+    -- UpdateLegs guarantees is the deepest a sole can go. +2 of slack
+    -- absorbs the foot block and rounding.
+    self.baseHipRow = 1 + self.bob
+    local h = self.baseHipRow + maxLen + 2
+    if h % 2 == 1 then h = h + 1 end
+
+    self.canvasW, self.canvasH = w, h
+
+    local used = {}
+    for _, leg in ipairs(self.legs) do used[leg.layer] = true end
+
+    for _, layer in ipairs(LAYER_ORDER) do
+        if used[layer] then
+            -- Fully transparent to start -- the canvas is a scratch
+            -- surface, not art; every visible pixel on it is written by
+            -- RasterizeLeg below.
+            local sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
+            local body = RigidBody2D.new(0, 0, w, h)
             body:SetSprite(sprite)
-            body:SetMass(0)             -- never integrated; nothing here falls
-            body:SetColor(leg.shade, leg.shade, leg.shade, 1.0)
-            leg.parts[name] = { body = body, sprite = sprite }
+            body:SetMass(0)          -- never integrated; nothing here falls
+            -- White tint: per-leg shade is baked into the pixels instead
+            -- (see Defaults.legs), because one canvas can carry several
+            -- legs and a body tint can't tell them apart.
+            body:SetColor(1.0, 1.0, 1.0, 1.0)
+            self.canvases[layer] = { sprite = sprite, body = body, dirty = true }
         end
     end
 end
@@ -278,14 +511,26 @@ end
 -- ---------------------------------------------------------------------
 
 -- hipLocalY is the hip's offset from the OWNER BODY'S CENTER, in texels,
--- +y down -- normally the torso's bottom edge (torsoHeight / 2).
+-- +y down -- normally the torso's bottom edge (torsoHeight / 2). Rounded
+-- to a whole texel: it's what anchors the canvas's pixel grid to the
+-- owner's, and half a texel of offset there is exactly the hip-seam
+-- crawl BuildCanvases' even-size rule exists to prevent. An owner with
+-- an odd-height torso should round its own height instead of relying on
+-- this (see Player.new).
 function LegRig:SetOwner(body, hipLocalY)
     self.owner = body
-    self.hipLocalY = hipLocalY or 0.0
+    self.hipLocalY = round(hipLocalY or 0.0)
+
+    -- Distance from the owner's CENTER to the canvas's center. Integer by
+    -- construction (integer hipLocalY, integer baseHipRow, even canvasH),
+    -- which is what keeps torso and legs rounding to the same grid.
+    self.canvasOffY = self.hipLocalY - self.baseHipRow + self.canvasH * 0.5
+
     for _, leg in ipairs(self.legs) do
         leg.footX, leg.footY = nil, nil -- re-snap on the next update
         leg.groundY, leg.lastMode, leg.lastFacing = nil, nil, nil
     end
+    self:MarkPoseDirty()
 end
 
 -- Optional: cache the ground set so UpdateLegs(dt) can be called with no
@@ -296,15 +541,28 @@ function LegRig:GetStandHeight() return self.standHeight or 0 end
 function LegRig:GetLegLength()   return self.legLength or 0 end
 function LegRig:HasLegs()        return #self.legs > 0 end
 
+-- Whole-texel vertical offset the OWNER should draw its torso at this
+-- frame, so the body rides the walk instead of gliding along at a fixed
+-- height while the legs work underneath it. Negative is up. See
+-- Defaults.bob and Player:Draw.
+function LegRig:GetBobOffset() return self.bobY or 0 end
+
 function LegRig:SetFacing(f)
     if f and f ~= 0 then self.facing = (f > 0) and 1 or -1 end
 end
 function LegRig:GetFacing() return self.facing end
 
+-- World-space SOLE position (where the foot meets the ground), not the
+-- ankle -- that's the point gameplay cares about (footstep particles,
+-- dust, sound).
 function LegRig:GetFootPosition(index)
     local leg = self.legs[index]
     if not leg then return nil end
     return leg.footX, leg.footY
+end
+
+function LegRig:MarkPoseDirty()
+    for _, canvas in pairs(self.canvases or {}) do canvas.dirty = true end
 end
 
 -- ---------------------------------------------------------------------
@@ -326,7 +584,7 @@ function LegRig:SampleGround(x, fromY, maxY, solids)
     solids = solids or self.solids
     if not solids then return nil end
 
-        local best = nil
+    local best = nil
     for _, s in ipairs(solids) do
         local body = solidBody(s)
         if body and body ~= self.owner then
@@ -361,9 +619,9 @@ function LegRig:SampleGround(x, fromY, maxY, solids)
                     if sprite and sw > 0 and sh > 0 then
                         surface = nil
                         local tw, th = sprite:GetWidth(), sprite:GetHeight()
-                        local col = math.floor((x - left) / sw * tw)
+                        local col = floor((x - left) / sw * tw)
                         col = clamp(col, 0, tw - 1)
-                        local startRow = math.floor((math.max(fromY, top) - top) / sh * th)
+                        local startRow = floor((max(fromY, top) - top) / sh * th)
                         if startRow < 0 then startRow = 0 end
                         for row = startRow, th - 1 do
                             if sprite:IsSolid(col, row) then
@@ -391,6 +649,12 @@ end
 -- (Player) can define its own Update/Draw without shadowing these.
 -- Call AFTER the owner's physics/collision has resolved for the frame --
 -- the legs are reacting to where the torso ended up, not predicting it.
+--
+-- Three stages, in order: solve the gait in CONTINUOUS world space
+-- (where the no-slide math lives), quantize the result to whole texels
+-- RELATIVE TO THE HIP (where the pixel-art rules live), then rasterize
+-- -- but only if that quantized pose isn't the one already on the
+-- canvas.
 function LegRig:UpdateLegs(dt, solids)
     if not self.owner or #self.legs == 0 then return end
     solids = solids or self.solids
@@ -398,9 +662,11 @@ function LegRig:UpdateLegs(dt, solids)
     local ox, oy = self.owner:GetPosition()
     local vx, vy = self.owner:GetVelocity()
     local grounded = self.owner:IsGrounded()
-    local speed = math.abs(vx)
+    local speed = abs(vx)
 
+    local prevFacing = self.facing
     self:SetFacing(speed > self.idleSpeed and vx or nil)
+    if self.facing ~= prevFacing then self:MarkPoseDirty() end
 
     -- Phase advances with DISTANCE, not time, so the gait automatically
     -- matches whatever speed the owner happens to be moving at -- a
@@ -422,15 +688,19 @@ function LegRig:UpdateLegs(dt, solids)
 
     local hipY = oy + self.hipLocalY
 
+    -- Over one stance window the body advances stride * stanceRatio while
+    -- the foot must sweep the same distance backward relative to the hip,
+    -- and the sweep spans 2 * amp -- so amp is exactly half of it. Any
+    -- other amplitude and planted feet slide. See Defaults.stride.
+    local amp = self.stride * self.stanceRatio * 0.5 * self.blend
+
+    local peakLift = 0.0
+
     for _, leg in ipairs(self.legs) do
         local hipX = ox + leg.hipX * self.facing
 
-        local sweep, lift = gaitPose((self.phase + leg.phase) % 1.0)
-        -- stride/4 is the zero-slide amplitude: over one stance half-
-        -- cycle the body advances stride/2 while the foot sweeps
-        -- stride/2 backward relative to the hip, netting out to a foot
-        -- that holds still in world space. See Defaults.stride.
-        local amp = self.stride * 0.25 * self.blend
+        local sweep, lift = gaitPose((self.phase + leg.phase) % 1.0, self.stanceRatio, self.swingFrames)
+        if lift > peakLift then peakLift = lift end
 
         local targetX = hipX + sweep * amp * self.facing
 
@@ -477,34 +747,80 @@ function LegRig:UpdateLegs(dt, solids)
         leg.footX = targetX + leg.offX
         leg.footY = targetY + leg.offY
 
-        self:SolveLeg(leg, hipX, hipY)
+        -- Everything from here on is integers. Offsets are taken from the
+        -- HIP, not from world zero -- see this file's header for why.
+        leg.soleDX = round(leg.footX - hipX)
+        leg.soleDY = round(leg.footY - hipY)
+    end
+
+    -- One foot is at the top of its arc exactly when the other is
+    -- straight under the body, so the swinging foot's own lift IS the
+    -- body's rise -- no second phase offset to keep in sync. Rounded to
+    -- whole texels; see Defaults.bob.
+    local bobY = -round(self.bob * self.blend * peakLift)
+    if bobY ~= self.bobY then
+        self.bobY = bobY
+        self:MarkPoseDirty()
+    end
+
+    -- Solve + quantize every leg, and notice whether the integer pose
+    -- actually moved. `hipRow` carries the bob, so raising the body
+    -- lengthens the leg toward a planted foot rather than dragging it.
+    local hipRowBase = self.baseHipRow + self.bobY
+    for _, leg in ipairs(self.legs) do
+        self:SolveLeg(leg, self.canvasW * 0.5 + leg.hipX * self.facing, hipRowBase)
+    end
+
+    -- Rasterize only the canvases whose pose changed. Quantizing to
+    -- texels is what makes this pay: standing still is a permanent skip,
+    -- and even a walk holds the same integer pose for runs of frames.
+    for _, layer in ipairs(LAYER_ORDER) do
+        local canvas = self.canvases[layer]
+        if canvas then
+            if canvas.dirty then
+                canvas.sprite:Clear()
+                for _, leg in ipairs(self.legs) do
+                    if leg.layer == layer then self:RasterizeLeg(canvas.sprite, leg) end
+                end
+                canvas.dirty = false
+            end
+            -- Position is continuous even when the raster isn't: the
+            -- canvas rides the owner exactly, and quad.vert's u_PixelSnap
+            -- puts the pair on the grid together.
+            canvas.body:SetPosition(ox, oy + self.canvasOffY)
+        end
     end
 end
 
--- Closed-form two-bone IK. L1 is the upper chain (legging + knee
--- spacer), L2 the boot. The knee lands on the circle intersection,
--- pushed to whichever side `bend` and the current facing select.
-function LegRig:SolveLeg(leg, hipX, hipY)
-    local L1 = leg.modules.legging.height + leg.modules.knee.height
-    local L2 = leg.modules.boot.height
+-- Closed-form two-bone IK, solved directly in CANVAS TEXEL SPACE. L1 is
+-- the upper chain (legging + knee cap), L2 the boot; the target is the
+-- ANKLE, which sits foot.height above the sole. The knee lands on the
+-- circle intersection, pushed to whichever side `bend` and the current
+-- facing select, and is then rounded to a whole texel like everything
+-- else -- that rounding is what makes the bone's staircase hold still
+-- between frames instead of crawling a pixel at a time.
+function LegRig:SolveLeg(leg, hipCol, hipRow)
+    local L1, L2 = leg.L1, leg.L2
 
-    local dx, dy = leg.footX - hipX, leg.footY - hipY
-    local d = math.sqrt(dx * dx + dy * dy)
+    local ankleCol = hipCol + leg.soleDX
+    local ankleRow = hipRow + leg.soleDY - leg.modules.foot.height
+
+    local dx, dy = ankleCol - hipCol, ankleRow - hipRow
+    local d = sqrt(dx * dx + dy * dy)
     if d < 1e-5 then dx, dy, d = 0.0, 1.0, 1.0 end
 
     -- Clamped just inside both singularities: exactly at full extension
-    -- (or full fold) the knee's offset from the hip->foot line is zero
+    -- (or full fold) the knee's offset from the hip->ankle line is zero
     -- and its side becomes numerically undecided, which reads as a
     -- one-frame knee flip.
-    local dClamped = clamp(d, math.abs(L1 - L2) + 0.01, L1 + L2 - 0.01)
+    local dClamped = clamp(d, abs(L1 - L2) + 0.01, L1 + L2 - 0.01)
 
     local ux, uy = dx / d, dy / d
-    local footX, footY = hipX + ux * dClamped, hipY + uy * dClamped
 
-    -- Distance along hip->foot to the knee's projection, plus its
+    -- Distance along hip->ankle to the knee's projection, plus its
     -- perpendicular offset (law of cosines).
     local a = (L1 * L1 - L2 * L2 + dClamped * dClamped) / (2.0 * dClamped)
-    local h = math.sqrt(math.max(0.0, L1 * L1 - a * a))
+    local h = sqrt(max(0.0, L1 * L1 - a * a))
 
     -- (uy, -ux) is the perpendicular that points toward +x when the leg
     -- hangs straight down, so bend * facing puts the knee in front of
@@ -512,45 +828,80 @@ function LegRig:SolveLeg(leg, hipX, hipY)
     local side = leg.bend * self.facing
     local nx, ny = uy * side, -ux * side
 
-    local kneeX = hipX + ux * a + nx * h
-    local kneeY = hipY + uy * a + ny * h
+    local kneeCol = round(hipCol + ux * a + nx * h)
+    local kneeRow = round(hipRow + uy * a + ny * h)
 
-    -- Redistribute the chain along the two solved directions using each
-    -- module's EXACT authored height, so no segment is ever stretched --
-    -- the quads stay their native pixel size and only rotate.
-    local upLen = math.max(L1, 1e-5)
-    local u1x, u1y = (kneeX - hipX) / upLen, (kneeY - hipY) / upLen
+    -- Re-anchor the ankle onto the ROUNDED knee so the shin's drawn
+    -- length matches its authored length after quantization -- otherwise
+    -- rounding the knee silently stretches or shortens the bone by up to
+    -- a texel, which shows up as the shin breathing while you walk.
+    if L2 > 0 then
+        local kx, ky = ankleCol - kneeCol, ankleRow - kneeRow
+        local klen = sqrt(kx * kx + ky * ky)
+        if klen > 1e-5 then
+            ankleCol = round(kneeCol + kx / klen * L2)
+            ankleRow = round(kneeRow + ky / klen * L2)
+        end
+    end
 
-    local lowLen = math.sqrt((footX - kneeX) ^ 2 + (footY - kneeY) ^ 2)
-    if lowLen < 1e-5 then lowLen = 1.0 end
-    local u2x, u2y = (footX - kneeX) / lowLen, (footY - kneeY) / lowLen
+    -- Only THIS leg's canvas: a two-legged rig with one foot planted and
+    -- one swinging redraws just the swinging half most frames.
+    if leg.hipCol ~= hipCol or leg.hipRow ~= hipRow
+        or leg.kneeCol ~= kneeCol or leg.kneeRow ~= kneeRow
+        or leg.ankleCol ~= ankleCol or leg.ankleRow ~= ankleRow then
+        local canvas = self.canvases[leg.layer]
+        if canvas then canvas.dirty = true end
+    end
 
-    local legging = leg.parts.legging
-    local knee    = leg.parts.knee
-    local boot    = leg.parts.boot
-
-    local thighLen = leg.modules.legging.height
-    local ax, ay = hipX + u1x * thighLen, hipY + u1y * thighLen
-    if legging then placeSegment(legging.body, hipX, hipY, ax, ay) end
-    if knee    then placeSegment(knee.body, ax, ay, kneeX, kneeY) end
-    if boot    then placeSegment(boot.body, kneeX, kneeY,
-                                 kneeX + u2x * leg.modules.boot.height,
-                                 kneeY + u2y * leg.modules.boot.height) end
-
-    leg.solvedFootX = kneeX + u2x * leg.modules.boot.height
-    leg.solvedFootY = kneeY + u2y * leg.modules.boot.height
-    leg.kneeX, leg.kneeY = kneeX, kneeY
+    leg.hipCol, leg.hipRow = hipCol, hipRow
+    leg.kneeCol, leg.kneeRow = kneeCol, kneeRow
+    leg.ankleCol, leg.ankleRow = ankleCol, ankleRow
 end
 
--- layer: "back", "front", or nil for all of them. Split so an owner can
+-- Paints one solved leg onto a canvas. Draw order is thigh, shin, knee
+-- cap, foot -- the cap goes on AFTER both bones so it covers the seam
+-- where their two staircases meet (which is exactly what a knee looks
+-- like), and the foot goes last so it's never clipped by the shin.
+function LegRig:RasterizeLeg(sprite, leg)
+    local m = leg.modules
+    local s = leg.shade
+
+    local function shaded(c) return c[1] * s, c[2] * s, c[3] * s, c[4] end
+
+    if m.legging.height > 0 or m.knee.height > 0 then
+        local r, g, b, a = shaded(m.legging.color)
+        sprite:DrawLimb(leg.hipCol, leg.hipRow, leg.kneeCol, leg.kneeRow, m.legging.width, r, g, b, a)
+    end
+
+    if m.boot.height > 0 then
+        local r, g, b, a = shaded(m.boot.color)
+        sprite:DrawLimb(leg.kneeCol, leg.kneeRow, leg.ankleCol, leg.ankleRow, m.boot.width, r, g, b, a)
+    end
+
+    if m.knee.height > 0 then
+        local r, g, b, a = shaded(m.knee.color)
+        sprite:FillRect(leg.kneeCol - floor(m.knee.width * 0.5),
+                        leg.kneeRow - floor(m.knee.height * 0.5),
+                        m.knee.width, m.knee.height, r, g, b, a)
+    end
+
+    if m.foot.height > 0 then
+        local r, g, b, a = shaded(m.foot.color)
+        -- Axis-aligned, always. Leaning it toward `facing` is what turns
+        -- a stump into a toe -- see Defaults.footLean.
+        local cx = leg.ankleCol + self.footLean * self.facing
+        sprite:FillRect(cx - floor(m.foot.width * 0.5), leg.ankleRow,
+                        m.foot.width, m.foot.height, r, g, b, a)
+    end
+end
+
+-- layer: "back", "front", or nil for both. Split so an owner can
 -- sandwich its torso between the two -- see Player:Draw().
 function LegRig:DrawLegs(layer)
-    for _, leg in ipairs(self.legs) do
-        if layer == nil or leg.layer == layer then
-            for _, name in ipairs(PART_ORDER) do
-                local part = leg.parts[name]
-                if part then DrawBody(part.body) end
-            end
+    for _, name in ipairs(LAYER_ORDER) do
+        if layer == nil or name == layer then
+            local canvas = self.canvases[name]
+            if canvas then DrawBody(canvas.body) end
         end
     end
 end
