@@ -23,9 +23,22 @@ class RigidBody2D;
 // 320-wide chunk costs ~2,700 SetPixel calls regardless of dirt depth.
 class TerrainSystem {
 public:
+    // What the last Update() covered, for the debug panel. All of it falls out
+    // of the two passes below, so collecting it costs nothing.
+    struct Stats {
+        int chunks = 0;
+        int disturbers = 0;
+        int blades = 0;
+        float milliseconds = 0.0f;
+    };
+
     void Update(ActorRegistry& actors, float deltaTime);
 
+    const Stats& GetStats() const { return m_Stats; }
+
 private:
+    Stats m_Stats;
+
     // Rebuilt every Update(), a member purely to reuse the allocation. Never read
     // across frames, so unlike LightingSystem::m_PrevLitRects nothing here can
     // dangle over an ActorRegistry::Clear() -- hence no Reset() to remember.

@@ -276,6 +276,45 @@ void Renderer2D::DrawScreenQuad(const Transform2D& transform, const Vector2& siz
     Shader::Unbind();
 }
 
+void Renderer2D::DrawScreenQuadBatch(const ScreenQuad* quads, size_t count, Shader* shader, Texture* texture) {
+    if (!m_Initialized || !quads || count == 0) return;
+    if (texture && !texture->IsValid()) return;
+
+    Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
+    if (!active || !active->IsValid()) return;
+
+    EnsureViewport(ViewportMode::FullWindow);
+
+    if (texture) texture->Bind();
+    active->Bind();
+
+    // Everything ApplyCommonUniforms would otherwise resend per quad. Identical
+    // for the whole batch -- screen space, unrotated, unsnapped -- so it goes up
+    // once and the loop below only touches position, size, color and UVs.
+    active->SetVec2("u_Resolution", m_Width, m_Height);
+    active->SetFloat("u_Time", m_Time);
+    active->SetFloat("u_Rotation", 0.0f);
+    active->SetVec2("u_CameraPos", m_Width * 0.5f, m_Height * 0.5f);
+    active->SetVec2("u_ViewportSize", m_Width, m_Height);
+    active->SetFloat("u_PixelSnap", 0.0f);
+    if (texture) active->SetInt("u_Texture", 0);
+
+    const float overdraw = active->overdrawScale;
+    for (size_t i = 0; i < count; ++i) {
+        const ScreenQuad& q = quads[i];
+        active->SetVec2("u_Position", q.center.x, q.center.y);
+        active->SetVec2("u_Size", q.size.x * overdraw, q.size.y * overdraw);
+        active->SetVec4("u_Color", q.color.r, q.color.g, q.color.b, q.color.a);
+        if (texture) {
+            active->SetVec2("u_UVOffset", q.uvOffset.x, q.uvOffset.y);
+            active->SetVec2("u_UVScale", q.uvScale.x, q.uvScale.y);
+        }
+        SubmitQuad(*active);
+    }
+
+    Shader::Unbind();
+}
+
 void Renderer2D::DrawScreenTexturedQuad(const Transform2D& transform, const Vector2& size, const Color& tint,
                                          Shader* shader, Texture* texture, Vector2 uvOffset, Vector2 uvScale) {
     if (!m_Initialized || !texture || !texture->IsValid()) return;

@@ -185,6 +185,19 @@ int Lua_RigidBody2DSetColor(lua_State* L) {
     return 0;
 }
 
+// A label only -- the engine never reads it back. The debug explorer lists
+// bodies by it, so naming an actor is what turns a flat pointer dump into a
+// readable scene tree.
+int Lua_RigidBody2DSetName(lua_State* L) {
+    LuaBinding::GetSelf<RigidBody2D>(L, 1)->name = luaL_checkstring(L, 2);
+    return 0;
+}
+
+int Lua_RigidBody2DGetName(lua_State* L) {
+    lua_pushstring(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->name.c_str());
+    return 1;
+}
+
 int Lua_RigidBody2DIsPlayer(lua_State* L) {
     lua_pushboolean(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->playerConfig != nullptr);
     return 1;
@@ -214,6 +227,8 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .Raw("GetScale", &Lua_RigidBody2DGetScale)
         .Raw("SetScale", &Lua_RigidBody2DSetScale)
         .Raw("SetColor", &Lua_RigidBody2DSetColor)
+        .Raw("SetName", &Lua_RigidBody2DSetName)
+        .Raw("GetName", &Lua_RigidBody2DGetName)
         .Raw("IsPlayer", &Lua_RigidBody2DIsPlayer)
         .Raw("GetSprite", &Lua_RigidBody2DGetSprite)
         .Raw("SetSprite", &Lua_RigidBody2DSetSprite)

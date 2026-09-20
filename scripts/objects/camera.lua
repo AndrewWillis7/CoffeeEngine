@@ -12,6 +12,7 @@ function Camera.new(x, y, viewportW, viewportH)
     local self = setmetatable({}, Camera)
 
     self.body = RigidBody2D.new(x, y)
+    self.body:SetName("Camera")
 
     self.camera = Camera2D.new()
     if viewportW and viewportH then

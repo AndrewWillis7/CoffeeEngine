@@ -55,6 +55,7 @@ function Init()
     -- pixel. Everything else is lit but not blocking -- light passes through and
     -- still tints the solid pixels it touches on the way.
     wall.body:SetLightBlocking(true)
+    wall.body:SetName("Wall")
 
     local campfireX, campfireSize = 178, 16
     campfire = Campfire.new(campfireX, terrain:SurfaceYAt(campfireX) - campfireSize / 2, campfireSize)
@@ -67,6 +68,11 @@ function Init()
     spotlight = Spotlight.new(300, 10, 140)
     spotlight2 = Spotlight.new(-300, 10, 140)
     spotlight2.light:SetColor(1.0, 0.0, 0.0, 1.0)
+
+    -- Names are a debug-menu nicety only: the explorer lists bodies by them
+    -- instead of by index. Nothing in the engine reads them back.
+    spotlight.body:SetName("Spotlight (violet)")
+    spotlight2.body:SetName("Spotlight (red)")
 
     solids = {terrain, wall}
 

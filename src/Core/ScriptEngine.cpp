@@ -15,6 +15,24 @@ extern "C" {
 
 namespace {
 
+// Replaces Lua's own print. Stock print writes to stdout with fwrite, which
+// slips straight past the std::cout tee DebugLog installs, so script output
+// would never reach the in-engine log. Formatting matches Lua 5.4: every
+// argument through tostring, tab separated, one trailing newline.
+int Lua_Print(lua_State* L) {
+    const int count = lua_gettop(L);
+    std::string line;
+    for (int i = 1; i <= count; ++i) {
+        size_t length = 0;
+        const char* text = luaL_tolstring(L, i, &length);
+        if (i > 1) line += '\t';
+        line.append(text, length);
+        lua_pop(L, 1); // luaL_tolstring pushed its result
+    }
+    std::cout << line << "\n";
+    return 0;
+}
+
 void CallIfExists(lua_State* L, const char* name, int nargs) {
     lua_getglobal(L, name);
     if (!lua_isfunction(L, -1)) {
@@ -40,6 +58,9 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     
     m_Lua = luaL_newstate();
     luaL_openlibs(m_Lua);
+
+    lua_pushcfunction(m_Lua, &Lua_Print);
+    lua_setglobal(m_Lua, "print");
 
     // Prepend scripts/ to package.path so require("objects.Player") resolves to
     // scripts/objects/Player.lua, keeping the stock search locations as fallback.
@@ -97,4 +118,5 @@ void ScriptEngine::Reload() {
         m_Context->actors->Clear();
     }
     Init(m_ScriptPath, *m_Context);
+    ++m_ReloadCount;
 }

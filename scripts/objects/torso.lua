@@ -195,6 +195,7 @@ function Torso:BuildBody(x, y)
     local w, h = self.w, self.h
 
     self.body = RigidBody2D.new(x, y, w, h)
+    self.body:SetName("Character")
     self.sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
     self.body:SetSprite(self.sprite)
 
@@ -279,6 +280,7 @@ function Torso:BuildOvershirtCanvas()
 
     local sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
     local body = RigidBody2D.new(0, 0, w, h)
+    body:SetName("Coat Canvas")
     body:SetSprite(sprite)
     body:SetMass(0)
     if body.SetRaycastTarget then body:SetRaycastTarget(false) end

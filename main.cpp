@@ -5,6 +5,7 @@
 #include "Core/ActorRegistry.h"
 #include "Core/Input/UserInputService.h"
 #include "Core/Gameplay/UI/EngineUIController.h"
+#include "Core/Gameplay/UI/DebugLog.h"
 #include "Core/Gameplay/LightingSystem.h"
 #include "Core/Gameplay/Terrain/TerrainSystem.h"
 #include "Renderer/Renderer2D.h"
@@ -14,6 +15,9 @@
 #include <GL/gl.h>
 
 int main() {
+    // Before the first log line, so the debug panel can show startup too.
+    DebugLog::Install();
+
     std::cout << "Initializing Engine..." << std::endl;
 
     auto window = IWindow::Create("Engine Test Window", 800, 600);
@@ -46,7 +50,8 @@ int main() {
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);
 
-    EngineUIController engineUI(actorRegistry, renderer2D, inputService, scriptEngine);
+    EngineUIController engineUI(actorRegistry, renderer2D, inputService, scriptEngine,
+                                *window, lightingSystem, terrainSystem);
 
     window->SetEventCallback([&renderer2D, &inputService](const WindowEvent& e){
         if (e.type == WindowEvent::Type::Close) {
@@ -68,11 +73,17 @@ int main() {
 
         window->PollEvents();
 
-        glClear(GL_COLOR_BUFFER_BIT);
-        renderer2D.BeginFrame(deltaTime);
-        scriptEngine.Update(deltaTime);
+        // The debug menu owns the simulation clock: it can pause it, slow it
+        // down, or let exactly one frame through. Unpaused and at 1x this is
+        // the real frame time unchanged. The renderer gets the same value, so
+        // shader-driven motion freezes with everything else.
+        const float simDeltaTime = engineUI.BeginFrame(deltaTime);
 
-        engineUI.Update(window->GetHeight());
+        glClear(GL_COLOR_BUFFER_BIT);
+        renderer2D.BeginFrame(simDeltaTime);
+        scriptEngine.Update(simDeltaTime);
+
+        engineUI.Update(window->GetWidth(), window->GetHeight());
         engineUI.Draw();
 
         graphicsContext->SwapBuffers();
@@ -83,5 +94,8 @@ int main() {
     }
 
     std::cout << "Engine shut down cleanly." << std::endl;
+
+    // Puts std::cout and std::cerr back before anything static tears down.
+    DebugLog::Shutdown();
     return 0;
 }

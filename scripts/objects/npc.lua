@@ -14,6 +14,7 @@ NPC.MIN_HOLD, NPC.MAX_HOLD = 1.0, 3.0
 function NPC.new(x, y, w, h, legConfig, torsoConfig)
     local self = Character.new(x, y, w, h, legConfig, torsoConfig)
     setmetatable(self, NPC)
+    self.body:SetName("NPC")
 
     self.walkDir = 0
     self.holdTime = 0

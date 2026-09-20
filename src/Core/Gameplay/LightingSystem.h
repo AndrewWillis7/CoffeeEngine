@@ -43,7 +43,20 @@ class PixelSprite;
 // A real spatial hash is the next step once actor counts grow.
 class LightingSystem {
 public:
+    // What the last Update() actually did. Everything here is a by-product of
+    // work the pass does anyway -- a vector size, or one increment beside the
+    // tint write -- so collecting it costs nothing measurable, and it is the
+    // only window the debug panel has into why a frame got expensive.
+    struct Stats {
+        int lights = 0;
+        int blockers = 0;
+        int litPixels = 0;
+        float milliseconds = 0.0f;
+    };
+
     void Update(ActorRegistry& actors, float deltaTime);
+
+    const Stats& GetStats() const { return m_Stats; }
 
     // Drops last frame's lit-rect bookkeeping WITHOUT erasing through it. Must
     // be called whenever the bodies it points at are about to be destroyed --
@@ -92,6 +105,8 @@ private:
     std::vector<LightSample> m_Lights;
     std::vector<Blocker> m_Blockers;
     std::vector<RigidBody2D*> m_Candidates;
+
+    Stats m_Stats;
 
     float m_Time = 0.0f; // accumulated for per-light flicker sampling
 };

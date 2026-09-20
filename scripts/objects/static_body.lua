@@ -14,6 +14,7 @@ function StaticBody.new(x, y, w, h, r, g, b, a)
     local self = setmetatable({}, StaticBody)
 
     self.body = RigidBody2D.new(x, y, w, h)
+    self.body:SetName("Static Body")
 
     -- A generated sprite rather than a flat quad, so every basic square is
     -- pixel-addressable by default, not just PNG-backed props.

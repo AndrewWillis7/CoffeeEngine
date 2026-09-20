@@ -14,6 +14,7 @@ function Campfire.new(x, y, size)
     local self = setmetatable({}, Campfire)
 
     self.body = RigidBody2D.new(x, y, size, size)
+    self.body:SetName("Campfire")
     self.sprite = Sprite.NewSolid(size, size, 0.55, 0.15, 0.05, 1.0)
     self.body:SetSprite(self.sprite)
 

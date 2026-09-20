@@ -61,8 +61,22 @@ public:
 
     const std::vector<std::unique_ptr<RigidBody2D>>& GetBodies() const { return m_Bodies; }
 
+    // Pool sizes, for the debug panel. Named shaders and disk-loaded sprites
+    // are counted with the rest even though Clear() spares them, because what
+    // this answers is "how much is loaded", not "how much is ephemeral".
+    size_t GetCollisionShapeCount() const { return m_CollisionShapes.size(); }
+    size_t GetCameraCount() const { return m_Cameras.size(); }
+    size_t GetLightEmitterCount() const { return m_LightEmitters.size(); }
+    size_t GetTerrainChunkCount() const { return m_TerrainChunks.size(); }
+    size_t GetShaderCount() const { return m_Shaders.size() + m_NamedShaders.size(); }
+    size_t GetSpriteCount() const { return m_PixelSprites.size() + m_GeneratedSprites.size(); }
+
+    // Total texels across every sprite in both pools -- a stand-in for how
+    // much pixel memory the scene is holding. Out of line: PixelSprite is
+    // only forward declared here.
+    size_t GetSpritePixelCount() const;
+
     void DumpTree() const;
-    std::vector<std::string> GetDebugLines() const;
 
     void Clear();
 private:

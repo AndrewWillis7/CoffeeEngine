@@ -9,7 +9,6 @@
 #include "Renderer/Shader.h"
 #include "Renderer/ShaderLibrary.h"
 #include "Renderer/PixelSprite.h"
-#include <sstream>
 #include <iostream>
 
 ActorRegistry::ActorRegistry() {
@@ -231,32 +230,15 @@ void ActorRegistry::DumpTree() const {
     }
 }
 
-std::vector<std::string> ActorRegistry::GetDebugLines() const {
-    std::vector<std::string> lines;
-    lines.reserve(m_Bodies.size() * 2 + 2);
-    lines.push_back(std::to_string(m_Bodies.size()) + " bodies");
-
-    for (size_t i = 0; i < m_Bodies.size(); ++i) {
-        const auto& body = m_Bodies[i];
-        std::ostringstream line;
-        line << "[" << i << "] (" << static_cast<int>(body->transform.position.x)
-             << "," << static_cast<int>(body->transform.position.y) << ")";
-        lines.push_back(line.str());
-
-        std::ostringstream flags;
-        flags << "  " << (body->shader ? "[Shd]" : "") 
-              << (body->collisionShape ? (body->collisionShape->GetType() == CollisionShape2D::Type::Box ? "[Box]" : "[Circ]") : "")
-              << (body->playerConfig ? "[Ply]" : "")
-              << (body->lightEmitter ? "[Lit]" : "")
-              << (body->terrain ? "[Ter]" : "")
-              << (body->lightBlocking ? "[Blk]" : "");
-        lines.push_back(flags.str());
+size_t ActorRegistry::GetSpritePixelCount() const {
+    size_t total = 0;
+    for (const auto& entry : m_PixelSprites) {
+        total += static_cast<size_t>(entry.second->GetWidth()) * entry.second->GetHeight();
     }
-
-    if (m_Bodies.empty()) {
-        lines.push_back("(no actors loaded)");
+    for (const auto& sprite : m_GeneratedSprites) {
+        total += static_cast<size_t>(sprite->GetWidth()) * sprite->GetHeight();
     }
-    return lines;
+    return total;
 }
 
 void ActorRegistry::Clear() {

@@ -5,6 +5,7 @@
 #include "../Math/AABB.h"
 #include "../../Renderer/PixelSprite.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace {
@@ -126,6 +127,9 @@ bool LightingSystem::IsOccluded(const Vector2& from, const Vector2& to, const Ri
 }
 
 void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
+    const auto profileStart = std::chrono::steady_clock::now();
+    m_Stats = Stats{};
+
     m_Time += deltaTime;
 
     const auto& bodies = actors.GetBodies();
@@ -143,8 +147,12 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
         if (rect.body->sprite) rect.body->sprite->ResetLightingRect(rect.minX, rect.minY, rect.maxX, rect.maxY);
     }
 
+    m_Stats.lights = static_cast<int>(m_Lights.size());
+
     if (m_Lights.empty()) {
         m_PrevLitRects.clear();
+        m_Stats.milliseconds = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - profileStart).count();
         return;
     }
 
@@ -339,6 +347,7 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
                     if (strength <= 0.0f) continue;
 
                     sprite->AccumulateLightTint(px, py, color, strength);
+                    ++m_Stats.litPixels;
 
                     if (!touched) {
                         touched = true;
@@ -359,4 +368,8 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
 
     // Swap rather than assign, so both vectors keep their capacity for next frame.
     m_PrevLitRects.swap(m_LitRectScratch);
+
+    m_Stats.blockers = static_cast<int>(m_Blockers.size());
+    m_Stats.milliseconds = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - profileStart).count();
 }

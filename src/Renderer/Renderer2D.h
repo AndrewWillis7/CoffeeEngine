@@ -67,6 +67,22 @@ public:
                         Shader* shader, Texture* texture,
                         Vector2 uvOffset = {0.0f, 0.0f}, Vector2 uvScale = {1.0f, 1.0f});
 
+    // One unrotated screen-space quad in a batch. uv* is ignored when the batch
+    // has no texture.
+    struct ScreenQuad {
+        Vector2 center;
+        Vector2 size;
+        Color color;
+        Vector2 uvOffset{0.0f, 0.0f};
+        Vector2 uvScale{1.0f, 1.0f};
+    };
+
+    // A run of screen quads sharing one shader and texture. Binds and uploads
+    // the mapping uniforms once, then re-sends only what varies per quad. The
+    // debug panel draws a few thousand 8x8 glyphs a frame, where that per-draw
+    // uniform traffic, not the geometry, is the cost.
+    void DrawScreenQuadBatch(const ScreenQuad* quads, size_t count, Shader* shader, Texture* texture = nullptr);
+
     Shader* GetDefaultShader() const { return m_DefaultShader.get();}
 
     // Global chunky-pixel-art scale: how many window pixels one game pixel

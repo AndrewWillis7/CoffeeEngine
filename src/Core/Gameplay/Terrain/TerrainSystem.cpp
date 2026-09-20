@@ -3,8 +3,12 @@
 #include "../../ActorRegistry.h"
 #include "../../Physics/RigidBody2D.h"
 #include "../../../Renderer/PixelSprite.h"
+#include <chrono>
 
 void TerrainSystem::Update(ActorRegistry& actors, float deltaTime) {
+    const auto profileStart = std::chrono::steady_clock::now();
+    m_Stats = Stats{};
+
     const auto& bodies = actors.GetBodies();
 
     // ---- Pass 1: who parts the grass this frame ------------------------
@@ -33,5 +37,11 @@ void TerrainSystem::Update(ActorRegistry& actors, float deltaTime) {
         RigidBody2D* body = owned.get();
         if (!body->terrain || !body->sprite) continue;
         body->terrain->Update(*body->sprite, *body, m_Disturbers, deltaTime);
+        ++m_Stats.chunks;
+        m_Stats.blades += body->terrain->GetBladeCount();
     }
+
+    m_Stats.disturbers = static_cast<int>(m_Disturbers.size());
+    m_Stats.milliseconds = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - profileStart).count();
 }

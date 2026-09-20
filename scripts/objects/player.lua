@@ -10,6 +10,7 @@ local Player = Class(Character)
 function Player.new(x, y, w, h, legConfig, torsoConfig)
     local self = Character.new(x, y, w, h, legConfig, torsoConfig)
     setmetatable(self, Player)
+    self.body:SetName("Player")
     return self
 end
 

@@ -126,6 +126,11 @@ function RigidBody2D:SetScale(sx, sy) end
 ---@param a number|nil Defaults to 1.0
 function RigidBody2D:SetColor(r, g, b, a) end
 
+---@return string A label with no engine meaning; the debug explorer lists bodies by it
+function RigidBody2D:GetName() end
+---@param name string
+function RigidBody2D:SetName(name) end
+
 ---@return boolean
 function RigidBody2D:IsPlayer() end
 

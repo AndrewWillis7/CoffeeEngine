@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <string>
 #include "../Math/Vector2.h"
 #include "../Math/Transform2D.h"
 #include "../Math/Color.h"
@@ -19,6 +20,10 @@ public:
     Transform2D transform;
     Vector2 size = Vector2(50.0f, 50.0f);
     Color color = Color::White();
+
+    // Purely a label: nothing in the engine keys off it. Scripts set it so
+    // the debug explorer can list "Campfire" instead of "#7 Light".
+    std::string name;
 
     // All non-owning; every one of these is owned by ActorRegistry. Each acts as
     // a capability tag -- setting it is what makes this body a camera, a light,

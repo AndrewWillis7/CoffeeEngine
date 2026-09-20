@@ -13,6 +13,7 @@ function Spotlight.new(x, y, aimDegrees)
     local self = setmetatable({}, Spotlight)
 
     self.body = RigidBody2D.new(x, y)
+    self.body:SetName("Spotlight")
 
     self.light = LightEmitterConfig.new()
     self.light:SetType("Cone")

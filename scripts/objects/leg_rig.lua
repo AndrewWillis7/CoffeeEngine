@@ -473,6 +473,7 @@ function LegRig:BuildCanvases()
         if used[layer] then
             local sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
             local body = RigidBody2D.new(0, 0, w, h)
+            body:SetName("Leg Canvas (" .. layer .. ")")
             body:SetSprite(sprite)
             body:SetMass(0)
             -- Not a ground target: feet must never snap onto their own

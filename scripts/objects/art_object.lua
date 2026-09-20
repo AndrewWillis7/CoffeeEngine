@@ -24,6 +24,7 @@ function ArtObject.new(x, y, w, h, spritePath, r, g, b, a)
     local self = setmetatable({}, ArtObject)
 
     self.body = RigidBody2D.new(x, y, w, h)
+    self.body:SetName("Art Object")
 
     if spritePath then
         self.sprite = Sprite.Load(spritePath)

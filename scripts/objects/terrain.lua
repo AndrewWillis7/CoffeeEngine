@@ -29,6 +29,7 @@ function Terrain.new(x, y, w, h, opts)
     local self = setmetatable({}, Terrain)
 
     self.body = RigidBody2D.new(x, y, w, h)
+    self.body:SetName("Terrain")
 
     -- Generate() writes every pixel, dirt and sky alike. Alpha 0 is what makes
     -- the area above the surface genuinely empty rather than black -- IsSolid is

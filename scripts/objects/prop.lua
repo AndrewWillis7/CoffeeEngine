@@ -15,6 +15,7 @@ function Prop.new(x, y, w, h, spritePath, r, g, b, a)
     local self = setmetatable({}, Prop)
 
     self.body = RigidBody2D.new(x, y, w, h)
+    self.body:SetName("Prop")
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
     self.body:SetMass(1)
 
