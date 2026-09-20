@@ -26,12 +26,21 @@ C++ owns three things, none of which have any policy in them:
   IK.SolveTwoBone / IK.GaitPose / IK.KneeBulge / IK.Approach
       Core/Gameplay/LegIK.h. Pure float math.
 
+  IK.SolveLegFrame / IK.RasterizeHip
+      Hand-written in Core/Scripting/ScriptBindings.cpp (not LegIK.h --
+      LegIK stays pure math with no Physics/PixelSprite dependency).
+      These don't add new POLICY either; they FUSE calls above (plus the
+      Lua arithmetic that used to sit between them) into single boundary
+      crossings, because leg_rig.lua makes several of these calls per
+      leg, per frame, and each one used to be a separate Lua<->C++ round
+      trip. See section 7.
+
   RigidBody2D::raycastTarget
       Per-body opt-out from the ground query.
 
 If you want to change how the legs LOOK or MOVE, you are editing Lua.
 You should not need to touch C++ unless you are changing the IK
-formulation itself.
+formulation itself or fusing another hot loop the same way.
 
 
 -----------------------------------------------------------------------
@@ -203,6 +212,22 @@ which is handled automatically in BuildCanvases.
       parks the solver on its singular fully-extended pose where the
       knee has no consistent side to pop toward. Below ~0.95 keeps a
       permanent, stable bend.
+    
+    idleStand = nil
+      Fraction of full leg length the hip rests at while STANDING STILL.
+      nil = same as `stand`. 1.0 = dead straight legs at rest.
+
+      `stand` still sets the walking hip height and the collider size
+      (GetStandHeight); idleStand only RAISES the hip frame as the walk
+      blends out, by round(legLength * idleStand) - standHeight whole
+      texels, carried to the torso through GetBobOffset. The collider
+      does not move, so at idle the drawn body is that many texels taller
+      than its box.
+
+      Capped every frame by what the planted legs can reach, so on
+      uneven ground the downhill leg straightens and the uphill one keeps
+      its bend -- a foot never floats. Grounded only; fades out in the
+      air. Costs idleLift extra canvas rows.
 
   stride = 20
       World distance travelled per FULL gait cycle (both legs step
@@ -400,6 +425,72 @@ state and own nothing.
       Camera2D::Follow and RigidBody2D's drag, and for the same reason:
       a plain current + (target - current) * rate * dt overshoots, and
       oscillates once rate * dt > 1.
+
+THE TWO BELOW ARE FUSED CALLS, not new formulas. Both used to be a
+sequence of several of the calls above plus the Lua arithmetic stitching
+them together, running once per leg (or once per hip column) EVERY
+FRAME. Fusing them into one boundary crossing is pure plumbing -- read
+LegRig:UpdateLegs / LegRig:RasterizeHip in leg_rig.lua for what they
+mean; this table is the call signature, not the design.
+
+  load, lift, ankleLift, footW, footOff,
+  footX, footY, groundY, offX, offY,
+  soleDX, soleDY, lastMode, slack =
+      IK.SolveLegFrame(
+          phase, stanceRatio, swingFrames,
+          hipX, hipY, facing, amp,
+          legLength, footBaseWidth,
+          grounded, snapDistance, ownerBody,
+          blend, stepHeight, airFactor, airReach,
+          pushHeight, pushToe, footLean, heelLean,
+          smoothing, dt,
+          hasFoot, prevFootX, prevFootY, prevOffX, prevOffY,
+          hasGroundY, prevGroundY, lastFacing, lastMode)
+
+      One leg's whole per-frame WORLD-SPACE solve: gait sample, ground
+      raycast (against `ownerBody` as the ignore), heel-off/foot-roll
+      shaping, the airborne/grounded target-Y branch, the discontinuity
+      offset smoothing, and the sole delta -- stage 1 of the two-stage
+      solve from section 0. This used to be IK.GaitPose +
+      Physics.RaycastDown + two IK.Approach calls (four crossings);
+      now it's one.
+
+      `hasFoot`/`hasGroundY` replace Lua nil-checks (leg.footX == nil,
+      leg.groundY == nil) as explicit booleans, since a C function can't
+      test Lua's nil on a plain number slot. `lastMode` is opaque --
+      store whatever it returns and pass it back next frame; don't
+      inspect it (it used to be the strings "air"/"ground", now it's
+      0/1, and nothing outside this call cares). `groundY` comes back as
+      Lua nil while airborne, matching the old `leg.groundY = nil`
+      reset, so `leg.groundY = groundY` after the call is correct as-is.
+      `slack` comes back as +inf when this leg isn't grounded this
+      frame, so `if slack < minSlack then minSlack = slack end` needs no
+      accompanying mode check.
+
+      Stage 2 (texel-space: hip frame -> knee -> ankle via
+      IK.SolveTwoBone) is NOT part of this call and can't be folded in --
+      it needs the hip row AFTER weight distribution, which needs every
+      leg's `load` from stage 1 first. LegRig:SolveLeg still calls
+      IK.SolveTwoBone directly; it was already a single crossing.
+
+  IK.RasterizeHip(sprite, legs, hipWidth, hipRear, hipRise,
+                   canvasW, leanX, facing, r, g, b, a, hipColRows)
+
+      Draws the whole sheared pelvis block in one call instead of one
+      FillRect per column (up to hip.width crossings). `legs` is the
+      rig's own self.legs array -- each entry must already carry this
+      frame's `hipX` (authored, forward-local) and `hipRow` (this
+      frame's tilt-adjusted row), which LegRig:SolveLeg leaves on it.
+      `hipColRows` is self.hipColRows, keyed 0..hipWidth-1, exactly as
+      BuildCanvases baked it once at construction -- nothing here
+      recomputes the taper.
+
+      Reproduces section 13's forward-local-then-mirror rule exactly:
+      centroid, slope, block edge and each column's row are computed and
+      rounded in forward-local space; `facing` is applied only on the
+      final FillRect x. If you ever port more of RasterizeHip's shape
+      into C++, keep that order -- it's what keeps a turn from popping
+      or growing the pelvis by a texel (see section 13).
 
 
 -----------------------------------------------------------------------

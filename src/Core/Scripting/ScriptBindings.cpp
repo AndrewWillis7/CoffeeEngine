@@ -2,6 +2,10 @@
 #include "LuaBinding.h"
 #include "Core/EngineContext.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 #include "Core/ActorRegistry.h"
 #include "Core/Physics/RigidBody2D.h"
 #include "Core/Physics/CollisionShape2D.h"
@@ -1079,12 +1083,261 @@ int Lua_IKApproach(lua_State* L) {
     return 1;
 }
 
-void RegisterLegIK(lua_State* L) {
+// -----------------------------------------------------------------------
+// IK.SolveLegFrame -- fuses the whole per-leg, per-frame WORLD-SPACE
+// solve that LegRig:UpdateLegs used to do as four separate boundary
+// crossings (IK.GaitPose, Physics.RaycastDown, two IK.Approach calls,
+// plus the surrounding Lua arithmetic) into one call. This is stage 1 of
+// the two-stage solve documented at the top of leg_rig.lua: continuous
+// world space, no texel rounding yet (stage 2 is still IK.SolveTwoBone,
+// called after weight distribution has settled the hip frame -- see
+// LegRig:SolveLeg -- and is left alone; it is already a single call).
+//
+// Every persistent per-leg value (footX/Y, groundY, offX/Y, lastFacing,
+// lastMode) is threaded through as an explicit in/out pair rather than
+// held here, matching IK.Approach's own "no state, no ownership" shape --
+// Lua still owns the leg table, this just does one frame's arithmetic on
+// it in one crossing instead of four.
+//
+// Mirrors scripts/objects/leg_rig.lua's old per-leg loop body operation
+// for operation (including left-to-right evaluation order on the
+// airborne targetY formula) so results are bit-identical to the
+// pre-fusion version. See scripts/api/IK.txt section 7 for the argument
+// reference.
+//
+// Args (31): phase, stanceRatio, swingFrames,
+//            hipX, hipY, facing, amp,
+//            legLength, footBaseWidth,
+//            grounded, snapDistance, ownerBody,
+//            blend, stepHeight, airFactor, airReach,
+//            pushHeight, pushToe, footLean, heelLean,
+//            smoothing, dt,
+//            hasFoot, prevFootX, prevFootY, prevOffX, prevOffY,
+//            hasGroundY, prevGroundY, lastFacing, lastMode
+// Returns (14): load, lift, ankleLift, footW, footOff,
+//               footX, footY, groundY (nil if airborne this frame),
+//               offX, offY, soleDX, soleDY, lastMode, slack
+//               (slack is +inf when not grounded this frame, so Lua's
+//               existing `if slack < minSlack then` needs no mode check)
+namespace {
+constexpr int kLegModeAir = 0;
+constexpr int kLegModeGround = 1;
+
+inline float RoundHalfUp(float v) { return std::floor(v + 0.5f); }
+inline float ClampF(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+} // namespace
+
+int Lua_IKSolveLegFrame(lua_State* L) {
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(1)));
+    luaL_argcheck(L, actors != nullptr, 1, "engine has no ActorRegistry bound");
+
+    int i = 1;
+    const float phase        = static_cast<float>(luaL_checknumber(L, i++));
+    const float stanceRatio  = static_cast<float>(luaL_checknumber(L, i++));
+    const int   swingFrames  = static_cast<int>(luaL_checkinteger(L, i++));
+    const float hipX         = static_cast<float>(luaL_checknumber(L, i++));
+    const float hipY         = static_cast<float>(luaL_checknumber(L, i++));
+    const float facing       = static_cast<float>(luaL_checknumber(L, i++));
+    const float amp          = static_cast<float>(luaL_checknumber(L, i++));
+    const float legLength    = static_cast<float>(luaL_checknumber(L, i++));
+    const float footBaseW    = static_cast<float>(luaL_checknumber(L, i++));
+    const bool  grounded     = lua_toboolean(L, i++) != 0;
+    const float snapDistance = static_cast<float>(luaL_checknumber(L, i++));
+    RigidBody2D* ignoreBody  = LuaBinding::Value<RigidBody2D*>::Get(L, i++);
+    const float blend        = static_cast<float>(luaL_checknumber(L, i++));
+    const float stepHeight   = static_cast<float>(luaL_checknumber(L, i++));
+    const float airFactor    = static_cast<float>(luaL_checknumber(L, i++));
+    const float airReach     = static_cast<float>(luaL_checknumber(L, i++));
+    const float pushHeight   = static_cast<float>(luaL_checknumber(L, i++));
+    const float pushToe      = static_cast<float>(luaL_checknumber(L, i++));
+    const float footLean     = static_cast<float>(luaL_checknumber(L, i++));
+    const float heelLean     = static_cast<float>(luaL_checknumber(L, i++));
+    const float smoothing    = static_cast<float>(luaL_checknumber(L, i++));
+    const float dt           = static_cast<float>(luaL_checknumber(L, i++));
+    const bool  hasFoot      = lua_toboolean(L, i++) != 0;
+    const float prevFootX    = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const float prevFootY    = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const float prevOffX     = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const float prevOffY     = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const bool  hasGroundY   = lua_toboolean(L, i++) != 0;
+    const float prevGroundY  = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const float lastFacing   = static_cast<float>(luaL_optnumber(L, i++, 0.0));
+    const int   lastMode     = static_cast<int>(luaL_optinteger(L, i++, kLegModeAir));
+
+    const LegIK::GaitSample gait = LegIK::SampleGait(phase, stanceRatio, swingFrames);
+
+    const float ankleLift = RoundHalfUp(pushHeight * gait.push * blend);
+    const float footW = std::max(1.0f, footBaseW - RoundHalfUp(pushToe * gait.push * blend));
+
+    const float rr = (gait.roll + 1.0f) * 0.5f;
+    const float rolled = -heelLean + (footLean + heelLean) * rr;
+    const float footOff = RoundHalfUp(footLean + (rolled - footLean) * blend);
+
+    const float targetX = hipX + gait.sweep * amp * facing;
+
+    int mode = kLegModeAir;
+    float targetY = 0.0f;
+    float groundY = 0.0f;
+    bool groundYValid = false;
+
+    if (grounded) {
+        const float maxY = hipY + legLength + snapDistance;
+        const Physics::GroundHit hit = Physics::RaycastDown(*actors, targetX, hipY, maxY, ignoreBody);
+        if (hit.hit) {
+            mode = kLegModeGround;
+            groundY = hasGroundY ? LegIK::Approach(prevGroundY, hit.y, smoothing, dt) : hit.y;
+            groundYValid = true;
+            targetY = groundY - gait.lift * stepHeight * blend;
+        } else {
+            targetY = hipY + legLength * airReach;
+        }
+    } else {
+        targetY = hipY + legLength * airReach * airFactor / airReach;
+    }
+
+    targetY = ClampF(targetY, hipY + legLength * 0.25f, hipY + legLength);
+
+    float offX, offY;
+    if (!hasFoot) {
+        offX = 0.0f;
+        offY = 0.0f;
+    } else {
+        if (facing != lastFacing || mode != lastMode) {
+            offX = prevFootX - targetX;
+            offY = prevFootY - targetY;
+        } else {
+            offX = prevOffX;
+            offY = prevOffY;
+        }
+        offX = LegIK::Approach(offX, 0.0f, smoothing, dt);
+        offY = LegIK::Approach(offY, 0.0f, smoothing, dt);
+    }
+
+    const float footX = targetX + offX;
+    const float footY = targetY + offY;
+
+    const float soleDX = RoundHalfUp(footX - hipX);
+    const float soleDY = RoundHalfUp(footY - hipY);
+
+    const float slack = (mode == kLegModeGround)
+        ? (legLength - soleDY)
+        : std::numeric_limits<float>::infinity();
+
+    lua_pushnumber(L, gait.load);
+    lua_pushnumber(L, gait.lift);
+    lua_pushnumber(L, ankleLift);
+    lua_pushnumber(L, footW);
+    lua_pushnumber(L, footOff);
+    lua_pushnumber(L, footX);
+    lua_pushnumber(L, footY);
+    if (groundYValid) lua_pushnumber(L, groundY); else lua_pushnil(L);
+    lua_pushnumber(L, offX);
+    lua_pushnumber(L, offY);
+    lua_pushnumber(L, soleDX);
+    lua_pushnumber(L, soleDY);
+    lua_pushinteger(L, mode);
+    lua_pushnumber(L, slack);
+    return 14;
+}
+
+// -----------------------------------------------------------------------
+// IK.RasterizeHip -- fuses LegRig:RasterizeHip's per-column FillRect loop
+// (one boundary crossing per pixel-wide sheared column, up to hip.width
+// of them) into a single call. `legs` is the rig's own self.legs array;
+// each leg table must already carry this frame's `hipX` (authored,
+// forward-local) and `hipRow` (this frame's tilt-adjusted hip row) --
+// exactly the two fields LegRig:SolveLeg leaves on it. `hipColRows` is
+// self.hipColRows, keyed 0..hipWidth-1, exactly as BuildCanvases baked
+// it once at construction.
+//
+// Reproduces RasterizeHip's forward-local-then-mirror rule from
+// scripts/api/IK.txt section 13 exactly: centroid, slope, block edge and
+// each column's row are all computed (and rounded) in forward-local
+// space, and facing is applied only on the final FillRect x. Getting
+// that order wrong is what used to make the pelvis pop or grow
+// asymmetrically on a turn.
+//
+// Args: sprite, legs, hipWidth, hipRear, hipRise, canvasW, leanX, facing,
+//       r, g, b, a, hipColRows
+int Lua_IKRasterizeHip(lua_State* L) {
+    PixelSprite* sprite = LuaBinding::Value<PixelSprite*>::Get(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    const int legsIdx = 2;
+    const int n = static_cast<int>(luaL_len(L, legsIdx));
+
+    const int hipWidth   = static_cast<int>(luaL_checkinteger(L, 3));
+    const float hipRear  = static_cast<float>(luaL_checknumber(L, 4));
+    const float hipRise  = static_cast<float>(luaL_checknumber(L, 5));
+    const float canvasW  = static_cast<float>(luaL_checknumber(L, 6));
+    const float leanX    = static_cast<float>(luaL_checknumber(L, 7));
+    const float facing   = static_cast<float>(luaL_checknumber(L, 8));
+    const float r        = static_cast<float>(luaL_checknumber(L, 9));
+    const float g        = static_cast<float>(luaL_checknumber(L, 10));
+    const float b        = static_cast<float>(luaL_checknumber(L, 11));
+    const float a        = static_cast<float>(luaL_optnumber(L, 12, 1.0));
+    luaL_checktype(L, 13, LUA_TTABLE);
+    const int rowsIdx = 13;
+
+    if (hipWidth <= 0 || n <= 0) return 0;
+
+    float sumF = 0.0f, sumRow = 0.0f;
+    float rearF = 0.0f, rearRow = 0.0f, foreF = 0.0f, foreRow = 0.0f;
+    bool haveRear = false, haveFore = false;
+
+    for (int li = 1; li <= n; ++li) {
+        lua_rawgeti(L, legsIdx, li);
+        lua_getfield(L, -1, "hipX");
+        const float f = static_cast<float>(luaL_checknumber(L, -1));
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "hipRow");
+        const float row = static_cast<float>(luaL_checknumber(L, -1));
+        lua_pop(L, 1);
+        lua_pop(L, 1); // leg table
+
+        sumF += f;
+        sumRow += row;
+        if (!haveRear || f < rearF) { rearF = f; rearRow = row; haveRear = true; }
+        if (!haveFore || f > foreF) { foreF = f; foreRow = row; haveFore = true; }
+    }
+
+    const float centerF = sumF / static_cast<float>(n);
+    const float midRow  = sumRow / static_cast<float>(n);
+
+    const float slope = (foreRow - rearRow) / std::max(1.0f, static_cast<float>(hipWidth - 1));
+
+    const float leftF = RoundHalfUp(centerF - hipRear - (hipWidth - 1) * 0.5f);
+    const float top   = midRow - hipRise;
+
+    const float midCol = canvasW * 0.5f + leanX;
+    const Color color(r, g, b, a);
+
+    for (int c = 0; c < hipWidth; ++c) {
+        lua_rawgeti(L, rowsIdx, c);
+        const int rows = static_cast<int>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+        if (rows <= 0) continue;
+
+        const float f = leftF + static_cast<float>(c);
+        const int x = static_cast<int>(midCol + f * facing);
+        const int y = static_cast<int>(RoundHalfUp(top + (f - centerF) * slope));
+        sprite->FillRect(x, y, 1, rows, color);
+    }
+
+    return 0;
+}
+
+void RegisterLegIK(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L)
         .Raw("SolveTwoBone", &Lua_IKSolveTwoBone)
         .Raw("GaitPose",     &Lua_IKGaitPose)
         .Raw("KneeBulge",    &Lua_IKKneeBulge)
         .Raw("Approach",     &Lua_IKApproach)
+        .RawWithContext("SolveLegFrame", actors, &Lua_IKSolveLegFrame)
+        .Raw("RasterizeHip", &Lua_IKRasterizeHip)
         .Finish("IK");
 }
 
@@ -1108,5 +1361,5 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterActorRegistry(L, context.actors);
     RegisterInput(L, context.input);
     RegisterPhysics(L, context.actors);
-    RegisterLegIK(L);
+    RegisterLegIK(L, context.actors);
 }

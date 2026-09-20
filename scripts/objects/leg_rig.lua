@@ -49,10 +49,21 @@ LegRig.Defaults = {
         taper = 1, rear = 1, layer = "front", color = nil,
     },
 
-    -- Fraction of full leg length the hip rests at while standing.
+    -- Fraction of full leg length the hip rests at while WALKING, and the
+    -- height the owner's collider is built around (GetStandHeight).
     -- Anything below ~0.95 keeps a permanent, stable knee bend; 1.0
-    -- parks the solver on its singular fully-extended pose.
+    -- parks the solver on its singular fully-extended pose and leaves a
+    -- swept-out foot unable to reach the ground.
     stand = 0.88,
+
+    -- Fraction of full leg length the hip rests at while STANDING STILL.
+    -- nil = same as `stand` (no change from walking). 1.0 = dead straight
+    -- legs at rest. The difference is applied as a whole-texel RISE of
+    -- the hip frame, carried to the torso through GetBobOffset -- the
+    -- collider never moves, so the drawn body is that many texels taller
+    -- than its box while idle. Capped per frame by what the planted legs
+    -- can actually reach, so a foot never floats on uneven ground.
+    idleStand = nil,
 
     -- World distance per FULL gait cycle. Sweep amplitude is DERIVED
     -- from this and stanceRatio, which is what keeps a planted foot
@@ -72,13 +83,29 @@ LegRig.Defaults = {
     idleSpeed  = 4,   -- |vx| below this counts as standing still
     gaitBlend  = 8,   -- how fast the walk cycle fades in/out
 
+    -- =================================================================
+    -- SPRINT / CROUCH
+    -- =================================================================
+    -- Selected each frame by whoever drives this rig (Player:HandleInput
+    -- reading Shift/Ctrl, an NPC's own AI, ...) via SetGaitState("walk" /
+    -- "sprint" / "crouch"). strideScale/stepHeightScale multiply `stride`
+    -- and `stepHeight` above; sink is a whole-texel amount the hip gets
+    -- pulled DOWN while crouching (bent knees, torso sinking toward the
+    -- ground -- the same trick GetBobOffset already uses for landing/
+    -- idle, just fed a third input). All three blend in/out over
+    -- gaitTuneSpeed rather than snapping, same Approach-based easing as
+    -- everything else in this rig.
+    sprint = { strideScale = 1.35, stepHeightScale = 1.25 },
+    crouch = { strideScale = 0.55, stepHeightScale = 0.45, sink = 3 },
+    gaitTuneSpeed = 10,
+
     -- Peak rise of the hips at mid-stance, WHOLE TEXELS. Driven off the
     -- swinging foot's own lift, so the two can't drift apart. 0 disables.
     bob = 1,
 
     footLean = 1,     -- texels the foot block sits forward of the ankle
 
-        -- Foot roll. footLean is the TOE-OFF end of the roll; heelLean is
+    -- Foot roll. footLean is the TOE-OFF end of the roll; heelLean is
     -- the heel-strike end, so the block travels backward-to-forward
     -- under the ankle across stance instead of sitting at one offset.
     heelLean   = 2,
@@ -225,6 +252,24 @@ function LegRig:InitLegRig(config)
     self.bob           = texels(pick(config.bob, D.bob), 0)
     self.footLean      = texels(pick(config.footLean, D.footLean), 0)
 
+    local sprintCfg, crouchCfg = config.sprint or {}, config.crouch or {}
+    self.sprintTuning = {
+        strideScale     = pick(sprintCfg.strideScale, D.sprint.strideScale),
+        stepHeightScale = pick(sprintCfg.stepHeightScale, D.sprint.stepHeightScale),
+    }
+    self.crouchTuning = {
+        strideScale     = pick(crouchCfg.strideScale, D.crouch.strideScale),
+        stepHeightScale = pick(crouchCfg.stepHeightScale, D.crouch.stepHeightScale),
+        sink            = texels(pick(crouchCfg.sink, D.crouch.sink), 0),
+    }
+    self.gaitTuneSpeed = pick(config.gaitTuneSpeed, D.gaitTuneSpeed)
+
+    -- "walk" is the identity state -- scale 1.0, no sink.
+    self.gaitState    = "walk"
+    self.gaitScaleCur = 1.0
+    self.stepScaleCur = 1.0
+    self.crouchCur    = 0.0
+
     local baseModules = {
         legging = makeModule(config.legging, D.legging),
         knee    = makeModule(config.knee,    D.knee),
@@ -357,6 +402,16 @@ function LegRig:InitLegRig(config)
     -- torso sprite, which Sprite.NewSolid can't author.
     self.standHeight = texels(self.legLength * self.stand, 0)
 
+    -- Idle straightening. DERIVED, not tuned: the whole-texel gap between
+    -- the walking hip height (which the collider is built around) and the
+    -- idle one. Whole texels because it is folded into bobY, and a
+    -- fractional rise would put the torso and legs on different subpixel
+    -- offsets. Never negative -- idleStand below stand is ignored rather
+    -- than sinking the body into its own collider.
+    local idleStand = clamp(pick(config.idleStand, D.idleStand) or self.stand, 0.0, 1.0)
+    self.idleLift = max(0, texels(self.legLength * idleStand, 0) - self.standHeight)
+    self.idleCur  = 0.0
+
     self:BuildCanvases()
 end
 
@@ -385,7 +440,10 @@ function LegRig:BuildCanvases()
         return
     end
 
-    local maxAmp = self.stride * self.stanceRatio * 0.5
+    -- Reserve for the WIDEST stride this rig can reach, which is sprint's,
+    -- not the walk baseline -- otherwise a sprinting stride would sweep
+    -- past the canvas edge and clip.
+    local maxAmp = self.stride * self.sprintTuning.strideScale * self.stanceRatio * 0.5
     local halfW, maxLen = 0, 0
 
     for _, leg in ipairs(self.legs) do
@@ -414,11 +472,18 @@ function LegRig:BuildCanvases()
     local w = ceil(halfW) * 2
     if w % 2 == 1 then w = w + 1 end
 
-    -- Rows above the hip line: bob, pelvic tilt (plus a row for the
-    -- shear), and the pelvis itself. Rows below run to the sole, which
+    -- Rows above the hip line: bob, idle straightening, pelvic tilt (plus
+    -- a row for the shear), and the pelvis itself. bob and idleLift are
+    -- reserved as a SUM rather than a max: the idle rise is smoothed
+    -- separately from the gait blend, so for a few frames around a
+    -- start/stop the two can overlap. Rows below run to the sole, which
     -- is anchored at baseHipRow and does NOT move with the dip.
-    self.baseHipRow = 1 + self.bob + self.tiltSlack + ((hip.height > 0) and hip.rise or 0)
-    local h = self.baseHipRow + maxLen + 2
+    self.baseHipRow = 1 + self.bob + self.idleLift + self.tiltSlack
+                      + ((hip.height > 0) and hip.rise or 0)
+    -- + crouch sink: the hip pulls further DOWN (toward the sole) while
+    -- crouching, which needs the same extra row budget a taller maxLen
+    -- would.
+    local h = self.baseHipRow + maxLen + 2 + self.crouchTuning.sink
     if h % 2 == 1 then h = h + 1 end
 
     self.canvasW, self.canvasH = w, h
@@ -481,13 +546,23 @@ function LegRig:GetLegLength()   return self.legLength or 0 end
 function LegRig:HasLegs()        return #self.legs > 0 end
 
 -- Whole-texel vertical offset the owner should draw its torso at this
--- frame, so the body rides the walk. Negative is up.
+-- frame, so the body rides the walk (and rises onto straight legs at
+-- idle). Negative is up.
 function LegRig:GetBobOffset() return self.bobY or 0 end
 
 function LegRig:SetFacing(f)
     if f and f ~= 0 then self.facing = (f > 0) and 1 or -1 end
 end
 function LegRig:GetFacing() return self.facing end
+
+-- Switches the walk/sprint/crouch gait tuning -- call every frame from
+-- whatever drives this rig, e.g. Player:HandleInput reading Shift/Ctrl.
+-- Not applied instantly: UpdateLegs blends stride/step/sink toward
+-- whatever state is current here at gaitTuneSpeed, so flipping states
+-- mid-stride eases rather than pops.
+function LegRig:SetGaitState(state)
+    self.gaitState = state or "walk"
+end
 
 -- World-space SOLE position (where the foot meets the ground), not the
 -- ankle -- the point gameplay cares about for footstep dust and sound.
@@ -529,8 +604,26 @@ function LegRig:UpdateLegs(dt)
     self:SetFacing(speed > self.idleSpeed and vx or nil)
     if self.facing ~= prevFacing then self:MarkPoseDirty() end
 
+    -- Sprint/crouch tuning, blended toward whatever SetGaitState last set
+    -- -- see LegRig.Defaults' SPRINT/CROUCH section for what each target
+    -- means. "walk" (the default) targets the identity values, so a rig
+    -- that never calls SetGaitState behaves exactly as before.
+    local targetStrideScale, targetStepScale, targetSink = 1.0, 1.0, 0.0
+    if self.gaitState == "sprint" then
+        targetStrideScale, targetStepScale = self.sprintTuning.strideScale, self.sprintTuning.stepHeightScale
+    elseif self.gaitState == "crouch" then
+        targetStrideScale, targetStepScale, targetSink =
+            self.crouchTuning.strideScale, self.crouchTuning.stepHeightScale, self.crouchTuning.sink
+    end
+    self.gaitScaleCur = IK.Approach(self.gaitScaleCur, targetStrideScale, self.gaitTuneSpeed, dt)
+    self.stepScaleCur = IK.Approach(self.stepScaleCur, targetStepScale, self.gaitTuneSpeed, dt)
+    self.crouchCur    = IK.Approach(self.crouchCur, targetSink, self.gaitTuneSpeed, dt)
+
+    local stride     = self.stride * self.gaitScaleCur
+    local stepHeight = self.stepHeight * self.stepScaleCur
+
     if grounded and speed > self.idleSpeed then
-        self.phase = (self.phase + (speed * dt) / self.stride) % 1.0
+        self.phase = (self.phase + (speed * dt) / stride) % 1.0
         self.blend = IK.Approach(self.blend, 1.0, self.gaitBlendRate, dt)
     else
         self.blend = IK.Approach(self.blend, 0.0, self.gaitBlendRate, dt)
@@ -563,69 +656,58 @@ function LegRig:UpdateLegs(dt)
     end
 
     local hipY = oy + self.hipLocalY
-    local amp  = self.stride * self.stanceRatio * 0.5 * self.blend
+    local amp  = stride * self.stanceRatio * 0.5 * self.blend
     local peakLift, totalLoad = 0.0, 0.0
 
+    -- Smallest whole-texel reach left over across the PLANTED legs: how
+    -- far the hip frame may rise before one of them would have to leave
+    -- the ground. Bounds the idle straightening below.
+    local minSlack = math.huge
+
+    -- The whole per-leg WORLD-SPACE solve -- gait sample, ground
+    -- raycast, target clamp, discontinuity smoothing -- is one call into
+    -- IK.SolveLegFrame instead of four (IK.GaitPose, Physics.RaycastDown,
+    -- two IK.Approach). See its comment in ScriptBindings.cpp for the
+    -- exact argument order; it mirrors this loop's old body 1:1; only
+    -- the boundary-crossing count changed, not the arithmetic.
     for _, leg in ipairs(self.legs) do
         local m = leg.modules
         local hipX = ox + leg.hipX * self.facing
 
-        local sweep, lift, load, push, roll =
-            IK.GaitPose((self.phase + leg.phase) % 1.0, self.stanceRatio, self.swingFrames)
+        local load, lift, ankleLift, footW, footOff, footX, footY, groundY,
+              offX, offY, soleDX, soleDY, lastMode, slack =
+            IK.SolveLegFrame(
+                (self.phase + leg.phase) % 1.0, self.stanceRatio, self.swingFrames,
+                hipX, hipY, self.facing, amp,
+                leg.length, m.foot.width,
+                grounded, self.snapDistance, self.owner,
+                self.blend, stepHeight, airFactor, self.airReach,
+                self.pushHeight, self.pushToe, self.footLean, self.heelLean,
+                self.smoothing, dt,
+                leg.footX ~= nil, leg.footX, leg.footY, leg.offX, leg.offY,
+                leg.groundY ~= nil, leg.groundY,
+                leg.lastFacing, leg.lastMode)
+
         if lift > peakLift then peakLift = lift end
         leg.load = load
         totalLoad = totalLoad + load
 
-        -- Heel-off: the ankle rises while the sole stays planted. The
-        -- block also narrows to a toe, which is what sells the push
-        -- rather than the leg just getting shorter.
-        leg.ankleLift = round(self.pushHeight * push * self.blend)
-        leg.footW = max(1, m.foot.width - round(self.pushToe * push * self.blend))
+        -- Heel-off/toe-narrow and foot-roll offset -- see IK.txt section
+        -- 11 for what these two mean; the shaping itself now happens
+        -- inside SolveLegFrame.
+        leg.ankleLift = ankleLift
+        leg.footW = footW
+        leg.footOff = footOff
 
-        -- Foot roll: heel-strike offset through flat to toe-off. Blends
-        -- to a constant footLean at rest, which is the pre-roll behavior.
-        local rr = (roll + 1.0) * 0.5
-        local rolled = -self.heelLean + (self.footLean + self.heelLean) * rr
-        leg.footOff = round(self.footLean + (rolled - self.footLean) * self.blend)
+        leg.groundY = groundY -- nil when airborne this frame
+        leg.offX, leg.offY = offX, offY
+        leg.lastFacing, leg.lastMode = self.facing, lastMode
+        leg.footX, leg.footY = footX, footY
+        leg.soleDX, leg.soleDY = soleDX, soleDY
 
-        local targetX = hipX + sweep * amp * self.facing
-
-        local mode = "air"
-        local targetY
-        if grounded then
-            local surface = Physics.RaycastDown(
-                targetX, hipY, hipY + leg.length + self.snapDistance, self.owner)
-            if surface then
-                mode = "ground"
-                leg.groundY = leg.groundY and IK.Approach(leg.groundY, surface, self.smoothing, dt) or surface
-                targetY = leg.groundY - lift * self.stepHeight * self.blend
-            else
-                targetY = hipY + leg.length * self.airReach
-            end
-        else
-            targetY = hipY + leg.length * self.airReach * airFactor / self.airReach
-        end
-        if mode ~= "ground" then leg.groundY = nil end
-
-        targetY = clamp(targetY, hipY + leg.length * 0.25, hipY + leg.length)
-
-        if leg.footX == nil then
-            leg.offX, leg.offY = 0.0, 0.0
-        else
-            if self.facing ~= leg.lastFacing or mode ~= leg.lastMode then
-                leg.offX = leg.footX - targetX
-                leg.offY = leg.footY - targetY
-            end
-            leg.offX = IK.Approach(leg.offX, 0.0, self.smoothing, dt)
-            leg.offY = IK.Approach(leg.offY, 0.0, self.smoothing, dt)
-        end
-
-        leg.lastFacing, leg.lastMode = self.facing, mode
-        leg.footX = targetX + leg.offX
-        leg.footY = targetY + leg.offY
-
-        leg.soleDX = round(leg.footX - hipX)
-        leg.soleDY = round(leg.footY - hipY)
+        -- slack is +inf when this leg isn't grounded this frame, so this
+        -- already behaves like the old `if mode == "ground" then ...`.
+        if slack < minSlack then minSlack = slack end
     end
 
     -- Weight distribution. For a two-legged opposed gait the loads
@@ -648,10 +730,26 @@ function LegRig:UpdateLegs(dt)
                      + self.hipTilt * (1.0 / n - leg.share) * n * self.blend)
     end
 
-    -- One rounding for the whole vertical: rise from the bob, drop from
-    -- the load and the landing absorb.
-    local rise = self.bob * self.blend * peakLift
-    local bobY = round(dipMean + self.landCur - rise)
+    -- Idle straightening: rise onto straight legs as the walk fades out.
+    -- Driven off (1 - blend) so it is the exact complement of the gait,
+    -- then smoothed again so a landing (blend already ~0 from the air)
+    -- eases up instead of popping two texels in one frame. Grounded
+    -- only -- airborne poses belong to airTuck/airReach. Capped by the
+    -- planted legs' slack AFTER smoothing, so stepping down off a ledge
+    -- mid-rise can never lift a foot off the ground.
+    local idleTarget = 0.0
+    if grounded and self.idleLift > 0 and minSlack < math.huge then
+        idleTarget = self.idleLift * (1.0 - self.blend)
+    end
+    self.idleCur = IK.Approach(self.idleCur, idleTarget, self.gaitBlendRate, dt)
+    local idleRise = clamp(self.idleCur, 0.0, max(0, minSlack))
+
+    -- One rounding for the whole vertical: rise from the bob and the idle
+    -- straightening, drop from the load, the landing absorb, and the
+    -- crouch sink (crouchCur -- see the SPRINT/CROUCH section of
+    -- LegRig.Defaults; it's a hip drop, same sign as dipMean/landCur).
+    local rise = self.bob * self.blend * peakLift + idleRise
+    local bobY = round(dipMean + self.landCur + self.crouchCur - rise)
     if bobY ~= self.bobY then
         self.bobY = bobY
         self:MarkPoseDirty()
@@ -780,51 +878,21 @@ end
 -- symmetric under negation, so any .5 rounded in canvas space biases one
 -- facing and not the other. Rounding forward-local and mirroring
 -- integers makes walking left an exact mirror of walking right.
+-- The whole per-column shear loop (up to hip.width separate FillRects)
+-- is one call into IK.RasterizeHip -- see its comment in
+-- ScriptBindings.cpp. It reads leg.hipX/leg.hipRow straight off
+-- self.legs and self.hipColRows straight off self, so the only things
+-- left to compute here are the ones IK.RasterizeHip doesn't own: the
+-- guard clauses and the color unpack.
 function LegRig:RasterizeHip(sprite)
     local h = self.hip
     if h.height <= 0 then return end
-    local n = #self.legs
-    if n == 0 then return end
+    if #self.legs == 0 then return end
 
-    -- leg.hipX is the AUTHORED socket offset, already forward-local and
-    -- facing-independent; leg.hipRow carries this frame's tilt. Both
-    -- sums are order-independent, so neither can flip with facing.
-    local sumF, sumRow = 0, 0
-    local rearF, rearRow, foreF, foreRow
-    for _, leg in ipairs(self.legs) do
-        local f = leg.hipX
-        sumF, sumRow = sumF + f, sumRow + leg.hipRow
-        if not rearF or f < rearF then rearF, rearRow = f, leg.hipRow end
-        if not foreF or f > foreF then foreF, foreRow = f, leg.hipRow end
-    end
-
-    local centerF = sumF / n
-    local midRow  = sumRow / n
-
-    -- Rise measured across the BLOCK's width, not the socket span, so a
-    -- wide pelvis doesn't turn one texel of tilt into five at its edge.
-    local slope = (foreRow - rearRow) / max(1, h.width - 1)
-
-    -- One rounding, forward-local. `rear` shifts the block backward,
-    -- which is the butt.
-    local leftF = round(centerF - h.rear - (h.width - 1) * 0.5)
-    local top   = midRow - h.rise
-
-    local midCol = self.canvasW * 0.5 + self.leanX
-    local facing = self.facing
-    local r, g, b, a = h.color[1], h.color[2], h.color[3], h.color[4]
-
-    for c = 0, h.width - 1 do
-        local rows = self.hipColRows[c]
-        if rows and rows > 0 then
-            local f = leftF + c
-            -- Tilt pivots on the socket centroid, so a rear-offset
-            -- pelvis rotates around the hips rather than around itself.
-            sprite:FillRect(midCol + f * facing,
-                            round(top + (f - centerF) * slope),
-                            1, rows, r, g, b, a)
-        end
-    end
+    IK.RasterizeHip(sprite, self.legs, h.width, h.rear, h.rise,
+                     self.canvasW, self.leanX, self.facing,
+                     h.color[1], h.color[2], h.color[3], h.color[4],
+                     self.hipColRows)
 end
 
 -- layer: "back", "front", or nil for both. Split so an owner can

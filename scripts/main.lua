@@ -1,4 +1,4 @@
-local Player = require("objects.player")
+local CharacterFactory = require("core.character_factory")
 local StaticBody = require("objects.static_body")
 local Prop = require("objects.prop")
 local Camera = require("objects.camera")
@@ -16,23 +16,35 @@ function Init()
 
     -- Player is the base unit everything else on this floor is laid out
     -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
-    -- above the floor's open left end and falls onto it.
-    player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, {
-        legging = { width = 2, height = 9, endWidth = 1, swell = 3, swellAt = 0.30,
-            color = {0.30, 0.33, 0.50} },
-        knee    = { width = 6, height = 4, color = {0.20, 0.22, 0.34} },
-        boot    = { width = 2, endWidth = 2, swell = 0, swellAt = 0.35, height = 7,
-            color = {0.14, 0.12, 0.16} },
-        foot    = { width = 5, height = 2 },
-        hip     = { rear = 3, taper = 2, height = 3, layer = "both"},
-        stand   = 0.95,
-        stride  = 18,
-        stepHeight = 4,
-        stanceRatio = 0.58,
-        swingFrames = 12,
-        snapDistance = 12,
-        bob = 1
+    -- above the floor's open left end and falls onto it. The leg-rig
+    -- look (module sizes/colors, gait tuning, sprint/crouch scales) is
+    -- CharacterFactory.DEFAULT_LEG_CONFIG now -- pass an explicit
+    -- legConfig table here instead if this scene ever wants the player
+    -- to look different from CreateNPC's characters.
+    --
+    -- Torso/clothing is CharacterFactory.DEFAULT_TORSO_CONFIG (a plain
+    -- undershirt, no overshirt) unless overridden -- this scene overrides
+    -- it to also demo the cloak-style overshirt (objects/torso.lua),
+    -- which is off by default since not every character wears one.
+    -- Colors are NOT set here -- CreatePlayer applies
+    -- core/player_colors.lua over whatever shape config is passed in
+    -- (pass `false` as the trailing palette argument to opt out).
+    player = CharacterFactory.CreatePlayer(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, nil, {
+        undershirt = { enabled = true, neckline = 0.28, hem = 1.0, width = 1.0 },
+        overshirt  = { enabled = false },
     })
+
+    -- A second, non-controllable character sharing the player's body
+    -- shape -- just wanders left/right on its own (see objects/npc.lua)
+    -- -- but with core/npc_colors.lua's palette instead of the player's,
+    -- to demo that recoloring a character is just a different palette
+    -- table, no shape changes needed. Created AFTER the player:
+    -- Actors.GetPlayer() (C++ side) resolves to the first body with a
+    -- PlayerActorConfig attached, so ordering here matters -- see
+    -- CharacterFactory.CreateNPC's comment.
+    npc = CharacterFactory.CreateNPC(140, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT,
+        nil, { undershirt = { enabled = true }, overshirt = { enabled = true } },
+        require("core.npc_colors"))
 
     -- The ground. Replaces the old flat 1000x15 StaticBody floor
     -- entirely: this is a real, noise-generated terrain chunk -- uneven
@@ -155,12 +167,13 @@ function Update(deltaTime)
     end
 
     -- Constants.RESOLUTION_WIDTH/HEIGHT doubles as the play area's
-    -- bounds here (texels, not real window pixels -- see Player:Update's
-    -- comment) because this level fits entirely within one camera
-    -- frame. A level that scrolls beyond what the camera shows at once
-    -- would need its own, separate level-bounds concept instead of
-    -- reusing the camera's native resolution for this.
+    -- bounds here (texels, not real window pixels -- see
+    -- Character:Update's comment) because this level fits entirely
+    -- within one camera frame. A level that scrolls beyond what the
+    -- camera shows at once would need its own, separate level-bounds
+    -- concept instead of reusing the camera's native resolution for this.
     player:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
+    npc:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
 
     -- Camera reacts AFTER gameplay has moved this frame, so it's chasing
     -- the freshest player position, then gets pushed to the renderer once
@@ -185,5 +198,6 @@ function Update(deltaTime)
     terrain:Draw()
     wall:Draw()
     player:Draw()
+    npc:Draw()
     campfire:Draw()
 end
