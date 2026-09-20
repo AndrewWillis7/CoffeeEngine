@@ -18,10 +18,13 @@ function Init()
     -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
     -- above the floor's open left end and falls onto it.
     player = Player.new(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, {
-        legging = { width = 2, height = 8, color = {0.8157, 0.7647, 0.6980} },
-        knee    = { width = 3, height = 2,  color = {0.4196, 0.3608, 0.3137} },
-        boot    = { width = 3, height = 6,  color = {0.4196, 0.3608, 0.3137} },
-        foot    = { width = 4, height = 2,  color = {0.2314, 0.2588, 0.3216} },
+        legging = { width = 2, height = 9, endWidth = 1, swell = 3, swellAt = 0.30,
+            color = {0.30, 0.33, 0.50} },
+        knee    = { width = 6, height = 4, color = {0.20, 0.22, 0.34} },
+        boot    = { width = 2, endWidth = 2, swell = 0, swellAt = 0.35, height = 7,
+            color = {0.14, 0.12, 0.16} },
+        foot    = { width = 5, height = 2 },
+        hip     = { rear = 3, taper = 2, height = 3, layer = "both"},
         stand   = 0.95,
         stride  = 18,
         stepHeight = 4,

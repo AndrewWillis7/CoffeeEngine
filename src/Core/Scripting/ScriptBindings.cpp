@@ -11,6 +11,8 @@
 #include "Core/Gameplay/LightingSystem.h"
 #include "Core/Gameplay/Terrain/TerrainChunk.h"
 #include "Core/Gameplay/Terrain/TerrainSystem.h"
+#include "Core/Physics/Raycast.h"
+#include "Core/Gameplay/LegIK.h"
 #include "Core/Math/Vector2.h"
 #include "Core/Math/Transform2D.h"
 #include "Core/Math/Color.h"
@@ -245,6 +247,7 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&RigidBody2D::lightEmitter>("GetLightEmitter", "SetLightEmitter")
         .PtrProperty<&RigidBody2D::terrain>("GetTerrain", "SetTerrain")
         .Property<&RigidBody2D::lightBlocking>("IsLightBlocking", "SetLightBlocking")
+        .Property<&RigidBody2D::raycastTarget>("IsRaycastTarget", "SetRaycastTarget")
         .Method<&RigidBody2D::AddForce>("AddForce")
         .Method<&RigidBody2D::Integrate>("Integrate")
         .Method<&RigidBody2D::IsGrounded>("IsGrounded")
@@ -431,6 +434,25 @@ int Lua_PixelSpriteDrawLimb(lua_State* L) {
     return 0;
 }
 
+// sprite:DrawTaperedLimb(x0, y0, x1, y1, t0, t1, bulge, bulgeAt, r, g, b, a)
+int Lua_PixelSpriteDrawTaperedLimb(lua_State* L) {
+    PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
+    self->DrawTaperedLimb(
+        static_cast<int>(luaL_checknumber(L, 2)),
+        static_cast<int>(luaL_checknumber(L, 3)),
+        static_cast<int>(luaL_checknumber(L, 4)),
+        static_cast<int>(luaL_checknumber(L, 5)),
+        static_cast<int>(luaL_checknumber(L, 6)),
+        static_cast<int>(luaL_checknumber(L, 7)),
+        static_cast<float>(luaL_optnumber(L, 8, 0.0)),
+        static_cast<float>(luaL_optnumber(L, 9, 0.35)),
+        Color(static_cast<float>(luaL_checknumber(L, 10)),
+              static_cast<float>(luaL_checknumber(L, 11)),
+              static_cast<float>(luaL_checknumber(L, 12)),
+              static_cast<float>(luaL_optnumber(L, 13, 1.0))));
+    return 0;
+}
+
 int Lua_PixelSpriteIsSolid(lua_State* L) {
     PixelSprite* self = LuaBinding::GetSelf<PixelSprite>(L, 1);
     int x = static_cast<int>(luaL_checknumber(L, 2));
@@ -450,6 +472,7 @@ void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
         .Raw("Clear", &Lua_PixelSpriteClear)
         .Raw("FillRect", &Lua_PixelSpriteFillRect)
         .Raw("DrawLimb", &Lua_PixelSpriteDrawLimb)
+        .Raw("DrawTaperedLimb", &Lua_PixelSpriteDrawTaperedLimb)
         .Finish();
 
     LuaBinding::Table(L)
@@ -457,6 +480,8 @@ void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
         .RawWithContext("NewSolid", actors, &Lua_PixelSpriteNewSolid)
         .Finish("Sprite");
 }
+
+
 
 // =====================================================================
 // PlayerActorConfig -- pointer type, owned by ActorRegistry. Every field
@@ -942,16 +967,14 @@ void RegisterInput(lua_State* L, UserInputService* input) {
 }
 
 // =====================================================================
-// Physics -- table of static RigidBody2D gravity accessors. Both cross
-// the Lua boundary as two raw floats rather than a Vector2 (matches
-// every other hot-path Vector2-shaped getter/setter in this file), and
-// RigidBody2D::SetGravity/GetGravity are static (no context to capture),
-// so both stay hand-written plain functions -- same as the original.
+// Physics -- gravity accessors plus the ground raycast. Gravity crosses
+// as two raw floats rather than a Vector2 (matches every other hot-path
+// Vector2-shaped getter here) and RigidBody2D::SetGravity/GetGravity are
+// static, so both stay plain functions; the raycast needs the
+// ActorRegistry, so it takes it as an upvalue the same way
+// RigidBody2D.new does.
 // =====================================================================
 
-// Physics.SetGravity(x, y) -- sets the engine-wide gravity acceleration
-// (px/s^2), applied every RigidBody2D::Integrate() call to any body with
-// mass > 0.
 int Lua_PhysicsSetGravity(lua_State* L) {
     float x = static_cast<float>(luaL_checknumber(L, 1));
     float y = static_cast<float>(luaL_checknumber(L, 2));
@@ -966,11 +989,103 @@ int Lua_PhysicsGetGravity(lua_State* L) {
     return 2;
 }
 
-void RegisterPhysics(lua_State* L) {
+// Physics.RaycastDown(x, fromY, maxY [, ignoreBody]) -> surfaceY, body
+// Returns nil on a miss. See Core/Physics/Raycast.h.
+int Lua_PhysicsRaycastDown(lua_State* L) {
+    auto* actors = static_cast<ActorRegistry*>(lua_touserdata(L, lua_upvalueindex(1)));
+    luaL_argcheck(L, actors != nullptr, 1, "engine has no ActorRegistry bound");
+
+    float x     = static_cast<float>(luaL_checknumber(L, 1));
+    float fromY = static_cast<float>(luaL_checknumber(L, 2));
+    float maxY  = static_cast<float>(luaL_checknumber(L, 3));
+
+    RigidBody2D* ignore = lua_isnoneornil(L, 4)
+        ? nullptr
+        : LuaBinding::Value<RigidBody2D*>::Get(L, 4);
+
+    Physics::GroundHit hit = Physics::RaycastDown(*actors, x, fromY, maxY, ignore);
+    if (!hit.hit) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    lua_pushnumber(L, hit.y);
+    LuaBinding::Value<RigidBody2D*>::Push(L, const_cast<RigidBody2D*>(hit.body));
+    return 2;
+}
+
+void RegisterPhysics(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L)
         .Raw("SetGravity", &Lua_PhysicsSetGravity)
         .Raw("GetGravity", &Lua_PhysicsGetGravity)
+        .RawWithContext("RaycastDown", actors, &Lua_PhysicsRaycastDown)
         .Finish("Physics");
+}
+
+// =====================================================================
+// IK -- stateless numeric kernels for objects/leg_rig.lua. No metatable,
+// no ownership, no context: every one of these is a pure function over
+// floats, so the whole table is plain lua_CFunctions.
+// =====================================================================
+
+// IK.SolveTwoBone(hipX, hipY, ankleX, ankleY, L1, L2, side)
+//   -> kneeX, kneeY, ankleX, ankleY   (all whole texels)
+int Lua_IKSolveTwoBone(lua_State* L) {
+    LegIK::Joints j = LegIK::SolveTwoBone(
+        static_cast<float>(luaL_checknumber(L, 1)),
+        static_cast<float>(luaL_checknumber(L, 2)),
+        static_cast<float>(luaL_checknumber(L, 3)),
+        static_cast<float>(luaL_checknumber(L, 4)),
+        static_cast<float>(luaL_checknumber(L, 5)),
+        static_cast<float>(luaL_checknumber(L, 6)),
+        static_cast<float>(luaL_optnumber(L, 7, 1.0)));
+    lua_pushnumber(L, j.kneeX);
+    lua_pushnumber(L, j.kneeY);
+    lua_pushnumber(L, j.ankleX);
+    lua_pushnumber(L, j.ankleY);
+    return 4;
+}
+
+// IK.GaitPose(phase, stanceRatio, swingFrames) -> sweep, lift, load, push, roll
+int Lua_IKGaitPose(lua_State* L) {
+    LegIK::GaitSample s = LegIK::SampleGait(
+        static_cast<float>(luaL_checknumber(L, 1)),
+        static_cast<float>(luaL_checknumber(L, 2)),
+        static_cast<int>(luaL_optinteger(L, 3, 0)));
+    lua_pushnumber(L, s.sweep);
+    lua_pushnumber(L, s.lift);
+    lua_pushnumber(L, s.load);
+    lua_pushnumber(L, s.push);
+    lua_pushnumber(L, s.roll);
+    return 5;
+}
+
+// IK.KneeBulge(L1, L2, dMin) -> texels
+int Lua_IKKneeBulge(lua_State* L) {
+    lua_pushnumber(L, LegIK::KneeBulge(
+        static_cast<float>(luaL_checknumber(L, 1)),
+        static_cast<float>(luaL_checknumber(L, 2)),
+        static_cast<float>(luaL_optnumber(L, 3, 0.0))));
+    return 1;
+}
+
+// IK.Approach(current, target, rate, dt) -> value
+int Lua_IKApproach(lua_State* L) {
+    lua_pushnumber(L, LegIK::Approach(
+        static_cast<float>(luaL_checknumber(L, 1)),
+        static_cast<float>(luaL_checknumber(L, 2)),
+        static_cast<float>(luaL_checknumber(L, 3)),
+        static_cast<float>(luaL_checknumber(L, 4))));
+    return 1;
+}
+
+void RegisterLegIK(lua_State* L) {
+    LuaBinding::Table(L)
+        .Raw("SolveTwoBone", &Lua_IKSolveTwoBone)
+        .Raw("GaitPose",     &Lua_IKGaitPose)
+        .Raw("KneeBulge",    &Lua_IKKneeBulge)
+        .Raw("Approach",     &Lua_IKApproach)
+        .Finish("IK");
 }
 
 } // namespace
@@ -992,5 +1107,6 @@ void ScriptBindings::RegisterAll(lua_State* L, EngineContext& context) {
     RegisterTerrainSystem(L, context.terrain, context.actors);
     RegisterActorRegistry(L, context.actors);
     RegisterInput(L, context.input);
-    RegisterPhysics(L);
+    RegisterPhysics(L, context.actors);
+    RegisterLegIK(L);
 }

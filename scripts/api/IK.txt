@@ -1,41 +1,102 @@
 =======================================================================
- CoffeeEngine -- LegRig knob reference
- (scripts/objects/leg_rig.lua)
+ CoffeeEngine -- IK LEG SYSTEM
+ scripts/objects/leg_rig.lua  +  Core/Physics/Raycast.h
+                              +  Core/Gameplay/LegIK.h
 =======================================================================
-
-Everything here is passed as the config table to LegRig.new(config), or
--- for the Player -- as the 5th argument to Player.new(x, y, w, h, cfg).
-Anything omitted falls back to LegRig.Defaults. Pass `false` instead of
-a table for a legless actor: every per-frame call becomes a no-op and
-GetStandHeight() returns 0.
 
 All distances are TEXELS (world units), not screen pixels.
 +Y IS DOWN, matching Vector2.h.
 
+
 -----------------------------------------------------------------------
- 1. MODULES -- the four drawn pieces of a leg
+ 0. WHAT LIVES WHERE
 -----------------------------------------------------------------------
 
-Each is a table { width = N, height = N, color = {r, g, b, a} }.
+LUA (scripts/objects/leg_rig.lua) owns everything you tune: module
+sizes and colours, the gait knobs, how many legs there are, which side
+each knee bends, where the pelvis sits, layering, and the dirty-canvas
+logic that decides whether a frame needs repainting at all.
+
+C++ owns three things, none of which have any policy in them:
+
+  Physics.RaycastDown(...)   Core/Physics/Raycast.h
+      Downward ground query against the LIVE ACTOR SET. Replaces the old
+      Lua SampleGround. You no longer pass a `solids` list anywhere.
+
+  IK.SolveTwoBone / IK.GaitPose / IK.KneeBulge / IK.Approach
+      Core/Gameplay/LegIK.h. Pure float math.
+
+  RigidBody2D::raycastTarget
+      Per-body opt-out from the ground query.
+
+If you want to change how the legs LOOK or MOVE, you are editing Lua.
+You should not need to touch C++ unless you are changing the IK
+formulation itself.
+
+
+-----------------------------------------------------------------------
+ 1. QUICKSTART
+-----------------------------------------------------------------------
+
+    local Player = require("objects.player")
+
+    -- x, y, width, TOTAL height, leg config
+    local player = Player.new(160, 80, 12, 32, {
+        legging = { width = 5, height = 9,  color = {0.30, 0.33, 0.50} },
+        knee    = { width = 5, height = 2,  color = {0.20, 0.22, 0.34} },
+        boot    = { width = 6, height = 5,  color = {0.14, 0.12, 0.16} },
+        foot    = { width = 7, height = 2 },
+        hip     = { height = 4, rear = 1 },
+        stride  = 20,
+    })
+
+Per frame:
+
+    player:Update(dt, solids, worldW, worldH)   -- solids is for the
+                                                -- COLLIDER, not the feet
+    player:Draw()
+
+`solids` still exists on Player:Update because that is how the torso's
+box collider resolves. The FEET no longer read it.
+
+For a non-Player actor, inherit LegRig directly:
+
+    local LegRig = require("objects.leg_rig")
+    local rig = LegRig.new(config)
+    rig:SetOwner(torsoBody, torsoHeight / 2)
+    ...
+    rig:UpdateLegs(dt)     -- call AFTER collision has resolved
+    rig:DrawLegs("back")
+    DrawBody(torsoBody)
+    rig:DrawLegs("front")
+
+Pass `false` instead of a config table for a legless actor: every
+per-frame call becomes a no-op and GetStandHeight() returns 0.
+
+
+-----------------------------------------------------------------------
+ 2. MODULES -- the four drawn pieces of a leg
+-----------------------------------------------------------------------
+
+Each is { width = N, height = N, color = {r, g, b, a} }.
 height = 0 removes that module entirely.
 Widths and heights are rounded to whole texels on the way in.
 
   legging   Upper leg (thigh). Drawn hip -> knee.
             default { width = 5, height = 9, color = {0.30, 0.33, 0.50} }
 
-  knee      Joint cap. ALWAYS axis-aligned, never rotated. Drawn last of
-            the two bones so it covers the seam where their staircases
-            meet. Its HEIGHT also extends the upper IK bone (see L1
-            below) -- that's the "leg format" knob: raising it pushes the
-            bend point further down the leg.
+  knee      Joint cap. ALWAYS axis-aligned, never rotated. Drawn after
+            both bones so it covers the seam where their staircases
+            meet. Its HEIGHT also extends the upper IK bone (see L1) --
+            that is the "leg format" knob: raising it pushes the bend
+            point further down the leg.
             default { width = 5, height = 2, color = {0.20, 0.22, 0.34} }
 
   boot      Lower leg (shin). Drawn knee -> ankle.
             default { width = 6, height = 5, color = {0.14, 0.12, 0.16} }
 
   foot      Axis-aligned block hanging below the ankle. Never rotates.
-            Colour defaults to the boot's if omitted, so a config written
-            before feet existed still gets a matching one.
+            Colour defaults to the boot's if omitted.
             default { width = 7, height = 2 }
 
 DERIVED (read-only, computed in InitLegRig):
@@ -54,258 +115,568 @@ and still looks like a straight stick. Measured on the stock player:
   legging  7 + knee 2 vs boot 8   ->  knee travels 2.9 -> 6.0 texels
                                       (3.1 total -- 5x the range)
 
-A short shin also has too little length to visibly change ANGLE against
-the thigh, which is the part the eye actually reads as "a knee".
 
 -----------------------------------------------------------------------
- 2. POSTURE
+ 3. THE HIP PIECE (pelvis / butt)
 -----------------------------------------------------------------------
 
-  stand         0.88    Fraction of `length` the hip rests at while
-                        standing. 1.0 = dead straight: geometrically
-                        right, visually stiff, and it parks the IK on its
-                        singular pose so the knee has no consistent side
-                        to pop toward. Stay below ~0.95.
+A block spanning both leg sockets, rasterized onto the same canvas as
+the legs -- so it is on the texel grid, never rotated, redrawn only when
+the integer pose changes, lit per-pixel, and costs zero extra draw calls.
 
-                        *** COUPLED TO THE TORSO. *** standHeight is
-                        round(length * stand), and Player.new forces the
-                        torso to an EVEN number of texels (see section 8).
-                        Change `stand` or any module height and re-check
-                        that the torso still lands even, or the hip seam
-                        starts crawling. Stock player: length 19,
-                        stand 0.95 -> standHeight 18 -> torso 14. Good.
+It exists because a two-bone chain hanging off a rectangular torso has a
+hard horizontal seam at the hip line and nothing joining the sockets, so
+a walking character reads as a box with sticks under it.
 
-  bob           1       Peak rise of the hips at mid-stance, WHOLE texels
-                        (it is rounded). Driven off the swinging foot's
-                        own lift, so it needs no phase of its own. 0 off.
-                        Fractional values are pointless -- they round.
-                        The owner must apply GetBobOffset() to its torso
-                        at draw time; see Player:Draw.
+    hip = {
+        width  = nil,     -- total texels across
+        height = 4,       -- rows tall; 0 removes it
+        rise   = nil,     -- rows sitting ABOVE the hip line
+        taper  = 1,       -- texels shaved off EACH side by the bottom row
+        rear   = 1,       -- texels shifted AWAY from facing
+        layer  = "front", -- "front" | "back" | "both"
+        color  = nil,     -- nil = legging colour
+    }
 
-  footLean      1       How far forward of the ankle the foot block sits.
-                        0 = a stump; 1-2 = a toe that reads as a facing
-                        direction even while standing still.
+  width   nil DERIVES it from the actual leg spread:
+          (widest |hipX| + half a thigh) * 2 + 2. An asymmetric or
+          many-legged rig therefore gets a pelvis that covers its own
+          sockets rather than a constant that happened to fit the
+          stock player.
 
------------------------------------------------------------------------
- 3. GAIT
------------------------------------------------------------------------
+  height  0 gives you the old seam-and-sticks look. 3-5 reads well at
+          320x180 against a 32-tall character.
 
-  stride        20      World distance travelled per FULL cycle (both
-                        legs step once). Phase advances with DISTANCE,
-                        not time, so this automatically matches whatever
-                        speed the actor happens to move at -- there is no
-                        separate animation rate to keep in sync.
+  rise    How many of `height` rows sit above the hip line; the rest
+          hang BELOW it, over the tops of the thighs, which is what
+          welds the pelvis to the legs instead of stacking it on them.
+          nil = height - 1 (one row of overlap).
+            rise == height   -> tucked entirely up behind the torso
+            rise == 0        -> dropped fully onto the thighs, heavy
+                                and low-slung
+          Clamped to height.
 
-  stanceRatio   0.58    Fraction of the cycle each foot spends PLANTED.
-                        0.5 is degenerate: one foot lifts the instant the
-                        other lands, so the actor is never on two feet
-                        and it reads as a rocking limp. Above 0.5 buys a
-                        double-support window. Below 0.5 reads as a jog.
+  taper   The difference between a pelvis and a brick. Each row from top
+          to bottom loses `taper` texels off each side, interpolated
+          linearly, so the shape narrows into the legs. 0 = flat slab.
+          Clamped to floor((width - 1) / 2) so it cannot invert.
 
-                        *** DO NOT set the sweep amplitude by hand. ***
-                        It is derived as stride * stanceRatio * 0.5,
-                        which is the exact value that makes a planted
-                        foot hold still in WORLD space while the body
-                        moves over it. Any other number and feet visibly
-                        ice-skate.
+  rear    THIS IS THE BUTT. Shifts the whole block opposite to the
+          facing direction, and flips with facing exactly the way
+          footLean flips the toe -- so turning around turns the
+          silhouette around with no second set of art. 0 centres it.
+          1-2 is the useful range at this scale.
 
-  swingFrames   4       Discrete poses the AIRBORNE foot may occupy on
-                        its way forward -- the "hand-animated" knob.
-                        Continuous interpolation slides the foot through
-                        every subpixel position, which on a chunky grid
-                        reads as a foot melting forward; quantizing gives
-                        the crisp pop of drawn sprite animation.
-                        Lower = chunkier. 0 = fully continuous.
-                        Only the swing is quantized; stance stays exactly
-                        linear because that is what the no-slide math
-                        depends on.
+  layer   The owner draws its torso BETWEEN the two canvases (see
+          Player:Draw), so:
+            "front"  pelvis over the near thigh and over the torso's
+                     bottom edge. Default; what you usually want.
+            "back"   tucked behind the torso -- only the part below the
+                     hip line shows.
+            "both"   drawn on both canvases.
+          The pelvis gets a vote on which canvases are allocated, so a
+          rig whose legs are all "front" but whose hip is "back" still
+          gets a back canvas.
 
-  stepHeight    3       Peak lift of a swinging foot. This is also your
-                        main KNEE FLEX control -- lifting the foot
-                        shortens hip-to-ankle, which is what bends the
-                        knee. Raise it if the walk looks stiff.
+  color   nil inherits the legging colour, so the pelvis matches the
+          thighs it is continuous with.
 
-  idleSpeed     4       |vx| below this counts as standing still.
+Set `hip = false` (or height = 0) to remove it entirely.
 
-  gaitBlend     8       How fast the walk fades in/out (exponential
-                        rate, framerate independent). Higher = snappier.
+GOTCHA: with layer = "front" and a rise > 0, the pelvis draws OVER the
+bottom rows of your torso sprite. If the torso has detail down there,
+use rise = 0 or layer = "back".
 
------------------------------------------------------------------------
- 4. STANCES -- named idle poses
------------------------------------------------------------------------
+The pelvis does NOT change GetStandHeight() -- stand height is a
+function of leg length only, so adding a hip never resizes the torso.
+It DOES grow the canvas (sideways by width/2 + rear, upward by rise),
+which is handled automatically in BuildCanvases.
 
-  stances               Table of name -> per-leg offset list, indexed
-                        exactly like `legs` (entry 1 is leg 1).
-                          x  moves the foot along the FACING direction
-                             (+ = forward), so a symmetric +/- pair is a
-                             legs-apart stance in side view.
-                          y  LIFTS the foot when negative (foot up on a
-                             rock). Positive y drives the foot into the
-                             ground, where the ground clamp eats it.
-                        default:
-                          { default = {}, apart = { {x=3}, {x=-3} } }
-
-  stance        "default"   Which pose is active at construction.
-
-  stanceBlend   9       Rate the feet ease between stances. Toggling
-                        looks like shifting weight rather than snapping.
-
-Stances fade in by (1 - gait blend) -- they only show while the actor is
-NOT walking, so a stance can never disturb the stride math. Offsets are
-applied BEFORE the ground query, so a foot placed out to the side lands
-on the terrain height over THERE, not the centre's -- it stands
-correctly on a slope.
-
-  rig:SetStance("apart")
-  rig:GetStance()                 -> current name
-  rig:ToggleStance("apart")       -> flips apart <-> default
-  rig:ToggleStance("a", "b")      -> flips between two named poses
-
-Unknown names are ignored rather than raising -- a stance is cosmetic
-and a typo in a level script should not take the legs away.
 
 -----------------------------------------------------------------------
- 5. GROUND & RECOVERY
+ 4. GAIT AND POSTURE KNOBS
 -----------------------------------------------------------------------
 
-  snapDistance  6       How far BELOW full extension to keep searching
-                        for ground. Lets a foot reach into a dip instead
-                        of dangling over it; past this the leg hangs
-                        straight (walking off a ledge).
+  stand = 0.88
+      Fraction of full leg length the hip rests at while standing. 1.0
+      is dead straight -- geometrically correct, visually stiff, and it
+      parks the solver on its singular fully-extended pose where the
+      knee has no consistent side to pop toward. Below ~0.95 keeps a
+      permanent, stable bend.
 
-  smoothing     24      Rate a foot eases across a DISCONTINUITY -- a
-                        step up, a facing flip, landing after a jump.
-                        NOT a lag filter on foot position: filtering the
-                        position makes a planted foot chase the body and
-                        re-introduces the ice-skating (~4 texels of slide
-                        per stance, measured). Continuous motion is
-                        tracked exactly; only the leftover offset decays.
+  stride = 20
+      World distance travelled per FULL gait cycle (both legs step
+      once). Sweep amplitude is DERIVED from this and stanceRatio, not
+      configured separately -- that exact ratio is what holds a planted
+      foot still in world space while the body moves over it. Any other
+      amplitude and the feet visibly ice-skate.
 
-  airTuck       0.68    Fraction of `length` the feet hang at while
-  airReach      0.97    RISING vs FALLING. Tucked up, reaching down.
+  stanceRatio = 0.58
+      Fraction of the cycle each foot spends PLANTED. 0.5 is the
+      degenerate case: one foot lifts the instant the other lands, so
+      the character is never on two feet and the walk reads as a rocking
+      limp. Above 0.5 buys a double-support window. Clamped 0.05..0.95.
+
+  swingFrames = 4
+      Discrete poses the SWINGING foot may occupy. A continuous swing
+      slides the foot through every subpixel position, which on a chunky
+      grid reads as a foot melting forward; snapping to a handful of
+      poses gives the crisp pop drawn animation has. Only the swing is
+      quantized -- stance stays exactly linear, because that is the half
+      of the cycle the no-slide math depends on. 0 disables.
+
+  stepHeight = 3        peak lift of a swinging foot
+  idleSpeed  = 4        |vx| below this counts as standing still
+  gaitBlend  = 8        how fast the walk cycle fades in and out
+
+  bob = 1
+      Peak rise of the hips at mid-stance, WHOLE TEXELS (it is rounded).
+      Driven off the swinging foot's own lift rather than a second
+      hand-tuned phase offset -- one foot is at the top of its arc
+      exactly when the other is straight under the body, which is when a
+      real walk is at its tallest, so the two are the same number. A
+      fractional bob would put the torso on a different subpixel offset
+      from the legs every frame. 0 disables.
+
+  footLean = 1
+      Texels the foot block sits forward of the ankle. 0 centres it (a
+      boot-shaped stump); 1-2 gives a toe that reads as a direction even
+      when standing still.
+
+  smoothing = 24
+      How fast a foot eases across a DISCONTINUITY -- a step up onto a
+      ledge, a facing flip, landing after a jump. Deliberately NOT a lag
+      filter on foot position: filtering position makes a planted foot
+      chase the body a fraction of a frame behind, which was measured at
+      ~4 texels of slide per stance. Continuous motion is tracked
+      EXACTLY; only the leftover offset decays, and ground height gets
+      its own smoothing so a step up eases in.
+
+  snapDistance = 6
+      How far BELOW full extension to keep searching for ground. Lets a
+      foot reach into a dip instead of dangling over it; beyond this the
+      leg hangs straight (walking off a ledge).
+
+  airTuck  = 0.68
+  airReach = 0.97
+      Fraction of full leg length the feet hang at while rising vs
+      falling. Tucked on the way up, reaching on the way down.
+
 
 -----------------------------------------------------------------------
- 6. PER-LEG -- the `legs` list
+ 5. PER-LEG OVERRIDES
 -----------------------------------------------------------------------
 
-Each entry describes one leg. The list length is the leg count, so this
-is also how you build a four-legged creature.
+`legs` is a list. Anything omitted from an entry falls back to the
+rig-level module. This is how you get a limping NPC, a peg leg, or an
+eight-legged creature without a second rig class.
 
-  hipX     0      Hip offset from the body centre, LOCAL texels,
-                  mirrored by facing. The stock rig uses +1 / -1: with
-                  both at 0 the sweep is the only thing separating the
-                  legs, so the moment the actor stops walking the two
-                  converge to an identical pose and the silhouette
-                  collapses to a single leg.
+    legs = {
+        { hipX =  1, phase = 0.0,  layer = "front", shade = 1.00 },
+        { hipX = -1, phase = 0.5,  layer = "back",  shade = 0.70 },
+    }
 
-  phase    auto   Position in the gait cycle, 0..1. 0.5 = perfectly
-                  opposed. Defaults to evenly spaced ((i-1) / #legs).
-
-  layer    "front"  Which canvas -- and therefore which side of the
-                  torso -- this leg draws on. "front" or "back".
-
-  shade    1.0    Flat multiplier BAKED INTO THE PIXELS (not a body
-                  tint, which would hit a whole canvas at once). Fakes
-                  depth on the far leg with no second set of art.
-                  It multiplies toward BLACK, so how far it can be
-                  pushed depends on how dark the modules already are --
-                  0.62 over an already-dark boot took the far leg below
-                  a night background and it stopped reading at all.
-                  0.70 is about the floor for dark palettes.
-
-  bend     1      +1 bends the knee toward facing (forward, human).
-                  -1 bends it backward (bird / digitigrade ankle).
-
+  hipX    Socket offset in LOCAL texels, mirrored by facing.
+  phase   Offset in the gait cycle. 0.5 = perfectly opposed. Defaults
+          to an even spread: (i - 1) / #legs.
+  layer   "front" or "back" -- which canvas, and therefore which side of
+          the torso it draws on.
+  shade   Flat multiplier BAKED INTO THE RASTERIZED PIXELS (not the body
+          tint, which would apply to a whole canvas at once) that fakes
+          depth on the far leg. Multiplies toward BLACK, so how far it
+          can be pushed depends on how dark the modules already are --
+          0.62 over an already-dark boot took the far leg below the
+          background on an unlit night stage. 0.70 is the safe floor.
+  bend    +1 bends the knee toward the facing direction (human);
+          -1 bends it backward (bird / digitigrade ankle).
   legging / knee / boot / foot
-                  Optional per-leg module overrides, same shape as
-                  section 1. This is how you build a limping or
-                  asymmetric creature without a second rig class.
+          Per-leg module overrides.
+
+WHY THE STOCK LEGS ARE STAGGERED: with both at hipX = 0 the sweep is the
+only thing separating them, so the moment the character stops walking
+the two legs converge to the identical solved pose and the silhouette
+collapses to a single leg. Two texels of permanent stagger costs nothing
+while walking and gives a standing character a stance.
+
+The rig's reach is the SHORTEST leg's -- that is the one that decides
+how high the hips can sit before something dangles.
+
 
 -----------------------------------------------------------------------
- 7. METHODS
+ 6. GROUND -- Physics.RaycastDown
 -----------------------------------------------------------------------
 
-Wiring:
-  rig:SetOwner(body, hipLocalY)   Torso body + hip offset from its
-                                  CENTRE. hipLocalY is rounded to a
-                                  whole texel -- it anchors the leg
-                                  canvas's pixel grid to the owner's.
-  rig:SetSolids(solids)           Cache the ground set so UpdateLegs(dt)
-                                  can be called with no second argument.
+    local y, body = Physics.RaycastDown(x, fromY, maxY [, ignoreBody])
 
-Per frame (call AFTER the owner's physics/collision has resolved):
-  rig:UpdateLegs(dt, solids)
-  rig:DrawLegs("back") / ("front") / (nil for both)
+Returns the world Y of the highest solid surface at `x` between `fromY`
+and `maxY`, plus the body that was hit. Returns nil on a miss.
+
+Useful outside the leg rig too: prop placement, drop shadows, projectile
+ground tests, AI ledge checks.
+
+WHAT COUNTS AS GROUND. A body is a candidate when it has terrain OR a
+collisionShape attached AND raycastTarget is true. There is no longer a
+caller-supplied `solids` list anywhere in the leg path.
+
+  * Terrain -> asks the heightmap (SurfaceWorldY), which returns the top
+    of the DIRT. Grass blades are solid pixels in the same sprite, so a
+    per-pixel probe would plant the foot on a blade. This is also the
+    exact number TerrainChunk::ResolveBody stands the collider on, so
+    feet and body agree by construction rather than by coincidence.
+
+  * Sprite-backed body -> AABB reject, then a per-pixel column walk with
+    IsSolid. This is what makes feet work against CARVED geometry:
+    PunchCircle a hole and the feet drop into it on the very next frame,
+    with no extra bookkeeping.
+
+  * Shapeless box -> its own top edge.
+
+BEHAVIOUR CHANGE FROM THE OLD LUA VERSION: feet used to see only the
+level's `solids` list. They now see anything collidable, so crates,
+props and platforms are walkable for free. To make a collider invisible
+to feet -- a trigger volume, a ladder, a one-way platform you want feet
+to ignore from below:
+
+    body:SetRaycastTarget(false)
+
+Leg canvases set this themselves, so a character can never stand on its
+own legs.
+
+WHY IT MOVED TO C++: the Lua version crossed the binding boundary once
+per PROBED TEXEL (PixelSprite:IsSolid down the column), per leg, per
+frame. An eight-legged actor on deep terrain was paying hundreds of
+lua_call round-trips for what is a few hundred nanoseconds of
+straight-line C++. Rotation is still ignored, matching CollisionShape2D
+and TerrainChunk's own axis-aligned simplification.
+
+
+-----------------------------------------------------------------------
+ 7. THE IK TABLE
+-----------------------------------------------------------------------
+
+Stateless numeric kernels. Call them from any script; they hold no
+state and own nothing.
+
+  kneeX, kneeY, ankleX, ankleY =
+      IK.SolveTwoBone(hipX, hipY, ankleX, ankleY, L1, L2, side)
+
+      Closed-form two-bone IK, hip -> knee -> ankle. `side` is the
+      signed side the knee is pushed toward (bend * facing): +1 in front
+      of the actor, -1 behind. All four returns are WHOLE TEXELS.
+
+      The knee is rounded, then the ankle is RE-ANCHORED onto that
+      rounded knee so the shin's drawn length matches its authored
+      length after quantization -- otherwise rounding silently stretches
+      or shortens the bone by up to a texel, which reads as the shin
+      breathing while you walk.
+
+      d is clamped just inside both singularities: exactly at full
+      extension or full fold the knee's offset from the hip->ankle line
+      is zero and its side becomes numerically undecided, which shows up
+      as a one-frame knee flip.
+
+  sweep, lift = IK.GaitPose(phase, stanceRatio, swingFrames)
+
+      phase in [0,1). Returns sweep in [-1,1] and lift in [0,1]. The
+      first (1 - stanceRatio) of the cycle is SWING, the rest STANCE.
+      Stance is EXACTLY LINEAR and must stay that way. All shaping is in
+      the swing: smoothstepped sweep so the foot leaves and arrives
+      gently, and a lift peaking near 40% rather than dead centre, so
+      the foot snaps up off the ground and floats down onto it -- a flat
+      landing reads as weight, a symmetric arc reads as a pendulum.
+
+  bulge = IK.KneeBulge(L1, L2, dMin)
+
+      Largest sideways offset the knee can reach from the hip->ankle
+      line, sampled across d in [dMin, L1 + L2]. Used once at rig
+      construction to size the canvas. The closed-form bound
+      (L1 * L2 / |L1 - L2|) is correct but loose enough to overestimate
+      the stock player by more than half, and every texel costs the
+      lighting pass on every light, every frame.
+
+  v = IK.Approach(current, target, rate, dt)
+
+      Framerate-independent exponential approach -- same shape as
+      Camera2D::Follow and RigidBody2D's drag, and for the same reason:
+      a plain current + (target - current) * rate * dt overshoots, and
+      oscillates once rate * dt > 1.
+
+
+-----------------------------------------------------------------------
+ 8. LEGRIG METHODS
+-----------------------------------------------------------------------
+
+  LegRig.new(config)              config == false builds a legless rig
+  rig:InitLegRig(config)          rebuild in place from a new config
+  rig:SetOwner(body, hipLocalY)   hipLocalY is the hip's offset from the
+                                  owner's CENTER, +y down. Normally the
+                                  torso's bottom edge (torsoHeight / 2).
+                                  Rounded to a whole texel.
+  rig:UpdateLegs(dt)              call AFTER collision has resolved
+  rig:DrawLegs(layer)             "back", "front", or nil for both
   rig:Draw()                      back then front
 
-Queries:
-  rig:GetStandHeight()            Texels of the actor's height that are
-                                  leg. Subtract from total height to
-                                  size the torso.
-  rig:GetLegLength()              Shortest leg's hip -> sole reach.
-  rig:GetBobOffset()              Whole-texel torso draw offset, this
-                                  frame. Negative is up.
-  rig:GetFootPosition(i)          World SOLE position (not the ankle) --
-                                  the point footstep dust/sound wants.
-  rig:GetFacing() / SetFacing(f)
+  rig:GetStandHeight()            texels of the actor's height that are
+                                  leg rather than torso
+  rig:GetLegLength()              hip -> sole of the shortest leg
   rig:HasLegs()
+  rig:GetBobOffset()              whole-texel Y the owner should draw
+                                  its torso at this frame (negative up)
+  rig:SetFacing(f) / GetFacing()
+  rig:GetFootPosition(i)          world-space SOLE of leg i -- the point
+                                  footstep dust and sound want
+  rig:MarkPoseDirty()             force a canvas repaint next update
+
+REMOVED: SampleGround and SetSolids. Ground is Physics.RaycastDown now.
+UpdateLegs ignores extra arguments, so an older UpdateLegs(dt, solids)
+call site is harmless and does not need editing.
+
 
 -----------------------------------------------------------------------
- 8. CONSTRAINTS YOU CAN BREAK BY ACCIDENT
+ 9. INTEGRATION RULES YOU CANNOT BREAK
 -----------------------------------------------------------------------
 
-TORSO HEIGHT MUST BE EVEN.
-  Player.new forces this. hipLocalY is torsoHeight / 2, and the leg
-  canvas is anchored to the owner's centre by that offset -- an odd
-  torso puts the canvas's pixel grid half a texel off the torso's, so
-  the two round to different texels under quad.vert's u_PixelSnap and
-  the hip seam crawls as the actor walks. Canvas dimensions are forced
-  even for the same reason.
+FORCE THE TORSO HEIGHT EVEN. hipLocalY is torsoHeight / 2, and the leg
+canvas anchors its pixel grid to the owner's centre by that offset. An
+odd torso puts the hip -- and therefore the whole canvas grid -- half a
+texel off the torso's own, so the two round to different texels under
+quad.vert's u_PixelSnap and the hip seam crawls as the player walks.
+BuildCanvases forces both canvas dimensions even for the same reason.
+See Player.new for the pattern.
 
-INTEGER-ONLY VALUES.
-  bob, footLean, hipX and every module width/height are rounded. A
-  fractional value there does not give you a fractional result, it
-  gives you a rounded one plus the illusion that you tuned something.
+UPDATE LEGS LAST. They react to where the torso ACTUALLY ended up
+post-collision. Update them before collision resolves and a foot plants
+at a position the body then gets pushed out of.
 
-DON'T HAND-TUNE THE SWEEP AMPLITUDE.
-  See stanceRatio. It is derived for a reason.
+DRAW IN THREE PARTS. DrawLegs("back"), then the torso, then
+DrawLegs("front"). Apply GetBobOffset() to the torso yourself -- the
+canvases carry it already.
 
-REBUILDING.
-  InitLegRig(config) can be called again to rebuild from a new config.
-  The old canvases are dropped; ActorRegistry owns them and reclaims
-  them on the next hot-reload.
+THE COLLIDER IS STILL A BOX. Legs are visual and do not collide. Author
+the collider with an OFFSET (CollisionShape2D.NewBox's 3rd/4th args)
+rather than by moving the body -- the body's position has to stay the
+TORSO'S centre, because that is the point DrawBody draws around and the
+point the camera follows.
+
 
 -----------------------------------------------------------------------
- 9. QUICK RECIPES
+ 10. TROUBLESHOOTING
 -----------------------------------------------------------------------
 
-Walk looks stiff / no visible knee
-  -> Balance L1 against L2 first (section 1). Then raise stepHeight.
-     Lowering `stand` deepens the resting bend but also shortens the
-     torso -- re-check the even rule.
+Hip seam crawls / legs slip against the torso by a texel
+    Torso height is odd. Force it even, and let hipLocalY be exactly
+    torsoHeight / 2.
 
-Walk looks like it is melting / too smooth
-  -> Lower swingFrames (3, or even 2).
+Feet ice-skate during stance
+    Something is filtering foot POSITION. Only ground height and the
+    discontinuity offset may be smoothed. Also check that you have not
+    set a sweep amplitude by hand instead of letting stride and
+    stanceRatio derive it.
 
-Feet slide along the ground
-  -> Something overrode the derived amplitude, or stanceRatio was
-     changed without letting the amplitude re-derive. Both feet sliding
-     equally is the signature.
+Knee flips side for one frame
+    L1 and L2 are too far apart, or something is driving the ankle past
+    full extension outside the target clamp.
 
-Character looks tippy / never on two feet
-  -> Raise stanceRatio above 0.5.
+Character stands on top of grass
+    That body is not tagged as terrain, so it fell through to the
+    per-pixel path. Attach the TerrainChunk with body:SetTerrain(chunk).
 
-Far leg disappears into a dark background
-  -> Raise its `shade`, and lighten the boot/foot rather than relying
-     on shade to do the separating.
+Feet snap onto something they should ignore
+    That body has a collision shape. body:SetRaycastTarget(false).
 
-Legs merge into one shape while standing
-  -> Give the legs non-zero, opposite hipX, or set a stance.
+Legs look like sticks with no visible knee
+    L1 vs L2 imbalance. See section 2's tuning rule.
 
-Digitigrade / bird creature
-  -> bend = -1, and a short legging with a tall knee to push the bend
-     point down the leg.
+Pelvis clipped at the canvas edge when turning around
+    Should be impossible -- BuildCanvases accounts for width/2 + rear.
+    If you changed hip fields AFTER construction, call InitLegRig again
+    instead; canvas size is baked once.
 
-Four legs
-  -> Four entries in `legs` with phases 0, 0.5, 0.25, 0.75 and hipX
-     spread front/back. Front pair on "front", rear pair on "back".
+Pelvis covers torso detail
+    layer = "front" with rise > 0 draws over the torso's bottom rows.
+    Use rise = 0, or layer = "back".
+
+Far leg disappears on a dark stage
+    shade multiplies toward black. Raise it toward 0.75-0.80.
+
+-----------------------------------------------------------------------
+ 11. WEIGHT SHIFTING
+-----------------------------------------------------------------------
+
+THE ONE RULE: everything in this section moves the HIP. A planted sole
+is anchored to the ground for the whole of stance and never moves. If a
+change here makes the feet slide or sink, it is in the wrong frame.
+
+The rig keeps two vertical frames inside the canvas:
+  HIP frame   baseHipRow + bob + load dip + landing dip + pelvic tilt
+  SOLE frame  baseHipRow + soleDY -- fixed, ignores all of the above
+The leg solves between them, so raising or dropping the body genuinely
+extends or flexes the leg toward a stationary foot.
+
+(This also fixes an old 1-texel foot float: bob used to be added to the
+hip AND the ankle, so a planted foot rose with the body at mid-stance.)
+
+WEIGHT SHARE. IK.GaitPose now returns five values:
+
+    sweep, lift, load, push, roll = IK.GaitPose(phase, stanceRatio, swingFrames)
+
+  load   0..1, fraction of body weight on this foot. 0 through swing,
+         ramps up through weight acceptance, 1 in single support, ramps
+         down through pre-swing. Two opposed legs sum to 1 by
+         construction.
+  push   0..1, heel-off progress. Non-zero only in pre-swing.
+  roll   -1 heel, 0 flat, +1 toe. Rolls forward across stance and
+         unwinds back to heel during swing.
+
+The rocker window widths are DERIVED from stanceRatio -- they are
+exactly the double-support overlap, (2*stanceRatio - 1)/stanceRatio, so
+raising stanceRatio automatically lengthens weight acceptance and
+push-off to match. There is no separate knob to keep in sync.
+
+    weight = {
+        loadDip     = 1,
+        tilt        = 1,
+        landDip     = 2,
+        landRecover = 14,
+        landSpeed   = 200,
+        lean        = 2,
+        leanSpeed   = 25,
+        leanRate    = 9,
+    }
+
+  loadDip   Texels the hip drops on the leg carrying the body -- the
+            stance knee flexing under load. The single biggest "has
+            mass" cue in the rig. 1 is plenty against a 32px character;
+            2 reads as heavy or armoured; 0 gives the old floaty walk.
+            Only the MEAN drop across the legs moves the body, so this
+            does not fight pelvic tilt.
+
+  tilt      PELVIC TILT: texels the UNLOADED hip socket drops below the
+            loaded one. This is the opposite of intuition and it is what
+            real gait does -- the swing-side pelvis drops because
+            nothing is holding it up. Computed as the deviation from the
+            mean, so it sums to zero and can never secretly translate
+            the character. The pelvis block shears to match; slope is
+            measured across the BLOCK width, not the socket span, so a
+            wide pelvis does not turn 1 texel of tilt into 5.
+
+  landDip / landRecover / landSpeed
+            Crouch absorb on landing. Fired on the grounded transition
+            using the PREVIOUS frame's vy, because collision resolves
+            before the legs update and has already zeroed the real
+            impact velocity. landSpeed is the |vy| that produces a full
+            landDip; scale it to your jump force.
+
+  lean / leanSpeed / leanRate
+            Horizontal lean, in whole texels, driven by velocity rather
+            than acceleration -- acceleration spikes to whatever one
+            frame of input sets, which reads as a twitch, and leanRate's
+            lag already gives starts and stops their own overshoot.
+            Shifts the hip sockets AND the torso by the same integer, so
+            the body moves over the planted feet instead of the legs
+            sliding under a fixed torso.
+
+            THE OWNER MUST APPLY IT. rig:GetLeanOffset() returns the X
+            the same way GetBobOffset() returns the Y; see Player:Draw.
+            Skip it and the torso will detach from the hips.
+
+FOOT ROLL AND PUSH-OFF (top-level, next to footLean)
+
+  heelLean = 2
+            Texels the foot block sits BEHIND the ankle at heel strike.
+            footLean is the toe-off end of the same roll, so the block
+            travels backward-to-forward under the ankle across stance
+            instead of sitting at one fixed offset. Blends to a constant
+            footLean at rest, so a standing pose is unchanged.
+
+  pushHeight = 2
+            Texels the ankle rises during pre-swing while the SOLE STAYS
+            PLANTED. This is heel-off, and after loadDip it is the
+            biggest naturalism win available -- it is the difference
+            between a push and a shuffle. The foot block is drawn from
+            the ankle down to the sole rather than at a fixed height, so
+            a raised heel leaves no gap under the shin.
+
+  pushToe = 2
+            Texels the foot block narrows to during push-off. Narrowing
+            is what sells it as rolling onto the toe; without it the leg
+            just looks shorter.
+
+CANVAS COST. loadDip and landDip drop the hip but never the sole, so
+they need no extra rows. bob and tilt raise it, so baseHipRow reserves
+1 + bob + tilt (+1 for the pelvis shear) + hip.rise. lean widens the
+canvas by leanMax on each side. All handled in BuildCanvases; if you
+change these fields after construction, call InitLegRig again rather
+than poking them -- canvas size is baked once.
+
+TUNING ORDER. Get loadDip right first with everything else at 0 -- it is
+the cue everything else hangs off. Then pushHeight, then tilt, then
+heelLean, then lean last. Adding them in any other order makes it very
+hard to tell which one you are actually looking at.
+
+-----------------------------------------------------------------------
+ 12. LIMB TAPER AND SWELL
+-----------------------------------------------------------------------
+
+legging and boot take three extra fields:
+
+  endWidth   Thickness at the module's FAR end (knee for the legging,
+             ankle for the boot). `width` is the thickness at its root.
+             nil = endWidth is width, i.e. the old constant-width bar,
+             so a config written before taper existed is unchanged.
+
+  swell      Extra texels added as a smooth half-sine hump along the
+             bone -- the quadriceps on a thigh, the calf on a shin.
+             This is the field that stops the leg reading as a stick.
+             Above ~2 on a 9-texel thigh it becomes a balloon: the hump
+             is a large fraction of the bone's length at this scale.
+
+  swellAt    0..1 along the bone where the hump peaks. Default 0.35.
+             Below 0.5 puts the mass toward the root, which is human.
+             Past 0.6 you get a bird's drumstick.
+
+Both are drawn with PixelSprite::DrawTaperedLimb, which uses the same
+major-axis scan and the same floor-centered runs as DrawLimb -- so a
+tapered segment still chains onto an untapered one, or onto a FillRect
+knee cap, sharing a center line with no sideways step at the joint.
+
+MATCH THE KNEE CAP. Set knee.width to legging.endWidth so the cap sits
+flush with where the thigh necks down. A cap wider than the bone ends
+meeting inside it leaves a visible bead at the joint -- good for armour,
+usually wrong for skin.
+
+CANVAS COST. BuildCanvases sizes off max(width, endWidth) + ceil(swell)
+per module, so widening either end or the hump is accounted for. It also
+feeds the DERIVED hip.width, which is (widest |hipX| + legging.width/2)
+* 2 + 2 -- so bumping the thigh widens the default pelvis too. If you
+pinned hip.width explicitly, re-check it after changing legging.width.
+
+
+-----------------------------------------------------------------------
+ 13. FACING SYMMETRY -- why RasterizeHip works forward-local
+-----------------------------------------------------------------------
+
+round() is round-half-up (floor(v + 0.5)) and is therefore NOT symmetric
+under negation: round(-6.5) is -6, round(6.5) is 7.
+
+Any .5 quantity rounded in CANVAS space is biased in one facing and not
+the other, because the sign of every offset flips with facing. Two of
+them used to be:
+
+  * the pelvis left edge, which is always a .5 for an even hip.width --
+    the block sat one texel further forward walking left than right,
+    reading as a butt that grew when you turned around;
+  * the socket-row mean, a .5 whenever pelvic tilt is odd, computed from
+    lo/hi sockets whose IDENTITY swaps with facing -- so the pelvis
+    popped a texel vertically on every turn.
+
+RasterizeHip therefore computes centroid, tilt slope, block edge and row
+entirely in FORWARD-LOCAL space (+1 = the way we face, leg.hipX as
+authored, facing-independent sums only), rounds there, and mirrors to
+canvas columns on the final FillRect line. Mirroring integers is exact,
+so left is a bit-perfect mirror of right by construction rather than by
+tuning.
+
+IF YOU ADD ANYTHING TO THE PELVIS, follow the same rule: round in
+forward-local, multiply by facing last. A `+ 0.5` patch in canvas space
+will fix one direction and break the other.

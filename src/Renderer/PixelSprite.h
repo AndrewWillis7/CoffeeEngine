@@ -87,6 +87,24 @@ public:
     // share a center line instead of stepping sideways at the joint.
     void DrawLimb(int x0, int y0, int x1, int y1, int thickness, const Color& color);
 
+        // DrawLimb with a thickness that varies along the segment: `t0` at
+    // (x0, y0), `t1` at (x1, y1), plus an optional smooth `bulge` of
+    // extra texels peaking at `bulgeAt` (0..1 along the bone).
+    //
+    // This is what stops a two-bone chain reading as two sticks. A real
+    // limb is widest near its root, swells over the muscle belly, and
+    // necks into the joint; a constant-width bar has none of that
+    // silhouette, and at 320x180 the silhouette is the entire character.
+    //
+    // Same major-axis scan and same floor-centered runs as DrawLimb, so
+    // a tapered segment still chains onto an untapered one (or a
+    // FillRect knee cap) sharing a center line, with no sideways step at
+    // the joint. Thickness is rounded per run, so the widening is a
+    // clean staircase rather than a dithered edge.
+    void DrawTaperedLimb(int x0, int y0, int x1, int y1,
+                         int t0, int t1, float bulge, float bulgeAt,
+                         const Color& color);
+
     // Sets alpha to 0 for every pixel within radius of (cx, cy) -- the
     // Noita-style "blow a hole in it" primitive. Leaves RGB untouched so a
     // later SetPixel/inspection still sees the original color if alpha

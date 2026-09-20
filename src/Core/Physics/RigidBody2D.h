@@ -77,6 +77,16 @@ public:
     // passing through this body, never its own glow.
     bool lightBlocking = false;
 
+    // Whether Physics.RaycastDown can hit this body. Only consulted for
+    // bodies that already have terrain or a collisionShape attached, so
+    // the default of true means "if you can collide with it, you can
+    // stand on it" -- which is what makes feet, drop shadows and prop
+    // placement agree with the collision resolver without a level script
+    // hand-maintaining a parallel `solids` list. Clear it for colliders
+    // that shouldn't be walkable: trigger volumes, ladders, one-way
+    // platforms you want feet to ignore from below.
+    bool raycastTarget = true;
+
     Vector2 velocity;
     float mass = 1.0f;
     float drag = 0.0f; // By simple Linear damping, 0 = none

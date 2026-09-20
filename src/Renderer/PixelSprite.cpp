@@ -156,6 +156,60 @@ void PixelSprite::DrawLimb(int x0, int y0, int x1, int y1, int thickness, const 
     }
 }
 
+void PixelSprite::DrawTaperedLimb(int x0, int y0, int x1, int y1,
+                                  int t0, int t1, float bulge, float bulgeAt,
+                                  const Color& color) {
+    if (t0 < 1) t0 = 1;
+    if (t1 < 1) t1 = 1;
+    bulgeAt = std::min(std::max(bulgeAt, 0.05f), 0.95f);
+
+    const int dx = x1 - x0;
+    const int dy = y1 - y0;
+    const int steps = std::max(std::abs(dx), std::abs(dy));
+
+    // Thickness at parameter u along the bone. The hump is a half-sine
+    // remapped so its peak lands on bulgeAt -- smooth on both sides, so
+    // the muscle belly reads as a curve rather than a kink.
+    auto widthAt = [&](float u) -> int {
+        float w = static_cast<float>(t0) + (static_cast<float>(t1) - static_cast<float>(t0)) * u;
+        if (bulge != 0.0f) {
+            const float v = (u < bulgeAt)
+                ? (u / bulgeAt) * 0.5f
+                : 0.5f + ((u - bulgeAt) / (1.0f - bulgeAt)) * 0.5f;
+            w += bulge * std::sin(3.14159265358979323846f * v);
+        }
+        int iw = static_cast<int>(std::lround(w));
+        return iw < 1 ? 1 : iw;
+    };
+
+    if (steps == 0) {
+        const int t = widthAt(0.0f);
+        FillRect(x0 - t / 2, y0, t, 1, color);
+        return;
+    }
+
+    // Integer-rational interpolation on the minor axis, same as DrawLimb:
+    // recomputed from `i` every step so it cannot drift, and the same
+    // endpoints always produce bit-identical runs.
+    if (std::abs(dy) >= std::abs(dx)) {
+        const int stepY = (dy > 0) ? 1 : -1;
+        for (int i = 0; i <= steps; ++i) {
+            const int py = y0 + stepY * i;
+            const int px = x0 + static_cast<int>(std::lround(static_cast<double>(dx) * i / steps));
+            const int t = widthAt(static_cast<float>(i) / static_cast<float>(steps));
+            FillRect(px - t / 2, py, t, 1, color);
+        }
+    } else {
+        const int stepX = (dx > 0) ? 1 : -1;
+        for (int i = 0; i <= steps; ++i) {
+            const int px = x0 + stepX * i;
+            const int py = y0 + static_cast<int>(std::lround(static_cast<double>(dy) * i / steps));
+            const int t = widthAt(static_cast<float>(i) / static_cast<float>(steps));
+            FillRect(px, py - t / 2, 1, t, color);
+        }
+    }
+}
+
 void PixelSprite::PunchCircle(int cx, int cy, float radius) {
     int minX = std::max(0, static_cast<int>(std::floor(cx - radius)));
     int maxX = std::min(m_Width - 1, static_cast<int>(std::ceil(cx + radius)));

@@ -159,10 +159,10 @@ end
 function Player:Draw()
     self:DrawLegs("back")
 
-    local bob = self:GetBobOffset()
-    if bob ~= 0 then
+    local dx, dy = self:GetLeanOffset(), self:GetBobOffset()
+    if dx ~= 0 or dy ~= 0 then
         local x, y = self.body:GetPosition()
-        self.body:SetPosition(x, y + bob)
+        self.body:SetPosition(x + dx, y + dy)
         DrawBody(self.body)
         self.body:SetPosition(x, y)
     else
