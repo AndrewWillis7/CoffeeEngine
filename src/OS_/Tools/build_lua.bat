@@ -1,4 +1,10 @@
 @echo off
+rem Builds src\Core\lua\win64\liblua.a via MSYS2 UCRT64. Safe to double-click
+rem or run from any directory -- the script locates the repo root itself.
+
+
+
+cd /d "%~dp0"
 
 echo Starting Lua build using MSYS2...
 

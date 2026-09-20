@@ -1,38 +1,44 @@
 #!/bin/bash
+# Builds a STATIC Lua library for Windows -> src/Core/lua/win64/liblua.a
+# Run from the MSYS2 UCRT64 shell (or via build_lua.bat). Works from any
+# working directory. Headers are NOT copied: src/Core/lua/include is shared
+# with the Linux build and must stay at the same Lua version (5.4.6).
+#
+# Cross-compiling from Linux instead:
+#   CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar src/OS_/Tools/winlua.sh
 
 set -e
 
 LUA_VERSION="5.4.6"
-TARGET_DIR="src/Core"
+CC="${CC:-gcc}"
+AR="${AR:-ar}"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+TARGET_DIR="${REPO_ROOT}/src/Core/lua/win64"
+
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+cd "${WORK_DIR}"
 
 echo "=== Downloading Lua v${LUA_VERSION} ==="
-curl -L -O "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
+curl -fL -O "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz"
 
 echo "=== Extracting source ==="
 tar -xzf "lua-${LUA_VERSION}.tar.gz"
-
 cd "lua-${LUA_VERSION}/src"
 
 echo "=== Removing CLI sources ==="
 rm -f lua.c luac.c
 
-echo "=== Compiling Lua ==="
-gcc -O2 -Wall -c *.c
+echo "=== Compiling Lua (${CC}) ==="
+# No LUA_BUILD_AS_DLL: static archive, so the vendored headers (which
+# don't define it) declare LUA_API as plain extern -- they must agree.
+"${CC}" -O2 -Wall -c *.c
 
-echo "=== Building lua54.dll ==="
-gcc -shared -o lua54.dll *.o \
-    -Wl,--out-implib,liblua54.a
+echo "=== Archiving static library ==="
+"${AR}" rcs liblua.a *.o
 
-echo "=== Copying output ==="
-mkdir -p "../../${TARGET_DIR}"
+mkdir -p "${TARGET_DIR}"
+cp liblua.a "${TARGET_DIR}/"
 
-cp lua54.dll "../../${TARGET_DIR}/"
-cp liblua54.a "../../${TARGET_DIR}/"
-
-cd ../..
-
-echo "=== Cleaning up ==="
-rm -rf "lua-${LUA_VERSION}"
-rm -f "lua-${LUA_VERSION}.tar.gz"
-
-echo "Success! lua54.dll created in ${TARGET_DIR}"
+echo "Success! liblua.a installed in ${TARGET_DIR}"

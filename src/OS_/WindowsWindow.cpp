@@ -16,6 +16,11 @@ static LRESULT CALLBACK WIndowProc(
 
             window = static_cast<WindowsWindow*>(cs->lpCreateParams);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(window));
+            // m_Hwnd is still null here (CreateWindowEx hasn't returned yet).
+            // Without this, HandleMessage forwards WM_NCCREATE to
+            // DefWindowProc(nullptr, ...), which returns FALSE and makes
+            // CreateWindowEx fail.
+            window->SetNativeWindow(hwnd);
         } else {
             window = reinterpret_cast<WindowsWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
         }
@@ -38,6 +43,8 @@ WindowsWindow::WindowsWindow(
     if (!classRegistered) {
         WNDCLASSEX wc{};
         wc.cbSize = sizeof(WNDCLASSEX);
+        // CS_OWNDC: the WGL context holds one HDC for the window's lifetime
+        wc.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = WIndowProc;
         wc.hInstance = m_Instance;
         wc.lpszClassName = L"EngineWindowClass";
@@ -248,7 +255,8 @@ void WindowsWindow::SetFullscreen(bool fullscreen) {
         m_WindowedH = windowedRect.bottom - windowedRect.top;
 
         HMONITOR monitor = MonitorFromWindow(m_Hwnd, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi{ sizeof(MONITORINFO) };
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(MONITORINFO);
         GetMonitorInfo(monitor, &mi);
 
         SetWindowLong(m_Hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);

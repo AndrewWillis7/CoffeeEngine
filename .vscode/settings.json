@@ -1,3 +1,14 @@
 {
-    "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/gcc.exe"
+    "editor.fontSize": 14,
+    "terminal.integrated.profiles.windows": {
+        "MSYS2 UCRT64": {
+            "path": "C:\\msys64\\usr\\bin\\bash.exe",
+            "args": ["--login", "-i"],
+            "env": {
+                "MSYSTEM": "UCRT64",
+                "CHERE_INVOKING": "1"
+            }
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "MSYS2 UCRT64"
 }

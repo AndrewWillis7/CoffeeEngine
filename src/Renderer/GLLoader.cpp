@@ -1,7 +1,6 @@
-// File: src/Renderer/GLLoader.cpp -- replace the whole file body with this
-// (adds Uniform1i, removes the duplicated block)
 #include "GLLoader.h"
 #include <iostream>
+#include <cstdint>
 
 #if defined(__linux__)
     #include <GL/glx.h>
@@ -12,10 +11,20 @@ void* GetPlatformProcAddress(const char* name) {
 }
 }
 #elif defined (_WIN32)
+    #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
 namespace {
 void* GetPlatformProcAddress(const char* name) {
-    return reinterpret_cast<void*>(wglGetProcAddress(name));
+    // wglGetProcAddress signals failure with 0, 1, 2, 3 or -1 depending on
+    // the driver, and never resolves GL 1.1 functions (those live in
+    // opengl32.dll itself) -- fall back to the DLL's exports in that case.
+    PROC p = wglGetProcAddress(name);
+    auto v = reinterpret_cast<std::intptr_t>(p);
+    if (v == 0 || v == 1 || v == 2 || v == 3 || v == -1) {
+        static HMODULE s_OpenGL32 = LoadLibraryA("opengl32.dll");
+        p = s_OpenGL32 ? GetProcAddress(s_OpenGL32, name) : nullptr;
+    }
+    return reinterpret_cast<void*>(p);
 }
 }
 #else

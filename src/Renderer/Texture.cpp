@@ -1,5 +1,5 @@
 #include "Texture.h"
-#include <GL/gl.h>
+#include "GLLoader.h" // GL/gl.h + glext.h (GL_CLAMP_TO_EDGE is GL 1.2)
 #include <iostream>
 #include "../OS_/stb_image.h"
 
