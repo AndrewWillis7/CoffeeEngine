@@ -7,18 +7,13 @@
 
 class PixelSprite {
 public:
-    // Loads a PNG off disk. Filter defaults to Nearest (not Texture's usual
-    // Linear default) -- same reasoning as Font's atlas: torn/punched edges
-    // should stay crisp, not bleed into neighboring pixels.
+    // Filter defaults to Nearest rather than Texture's Linear: torn and punched
+    // edges should stay crisp, not bleed into neighbours.
     explicit PixelSprite(const std::string& filepath, Texture::Filter filter = Texture::Filter::Nearest);
 
-    // Builds a blank, in-memory sprite filled solid with `fill` -- no PNG
-    // involved. This is the "split a basic flat-color square into
-    // individual pixels" primitive: ActorRegistry::CreateSolidSprite (see
-    // its header comment) calls this once per body so every plain
-    // RigidBody2D quad becomes something SetPixel/PunchCircle/lighting can
-    // actually address a pixel at a time, the same way a loaded PNG
-    // already could.
+    // A blank in-memory sprite filled with `fill` -- the "turn a flat quad into
+    // addressable pixels" primitive, so SetPixel/PunchCircle/lighting work on a
+    // plain body exactly as they would on a loaded PNG.
     PixelSprite(int width, int height, const Color& fill, Texture::Filter filter = Texture::Filter::Nearest);
 
     PixelSprite(const PixelSprite&) = delete;
@@ -28,157 +23,91 @@ public:
     int GetWidth() const { return m_Width; }
     int GetHeight() const { return m_Height; }
 
-    // (0, 0) is top-left, matching the loading convention documented in
-    // Texture.cpp. Out-of-bounds calls are silently ignored/return
-    // transparent-black rather than asserting -- gameplay code (a punch
-    // radius near an edge, a collision probe just off the sprite) hits
-    // this constantly and shouldn't have to bounds-check first.
+    // (0, 0) is top-left. Out-of-bounds is silently ignored / reads transparent
+    // rather than asserting: a punch radius near an edge or a probe just off the
+    // sprite hits this constantly and shouldn't have to bounds-check first.
     void SetPixel(int x, int y, const Color& color);
     Color GetPixel(int x, int y) const;
-    bool IsSolid(int x, int y) const; // alpha > 0
 
-        // =====================================================================
-    // Raster primitives -- the "author a sprite from code, every frame"
-    // path. SetPixel above is the general primitive, but a procedural rig
-    // (see scripts/objects/leg_rig.lua) redraws a few hundred pixels EVERY
-    // frame, and paying a Lua->C++ call boundary per pixel for that is
-    // both slow and unreadable on the script side. These three do the
-    // whole shape in one call.
-    //
-    // All three write the base buffer AND mirror into the lit buffer, same
-    // as SetPixel, so a redraw is visible immediately even on a pixel no
-    // light happens to touch this frame. All three clamp to bounds rather
-    // than asserting -- a limb solved slightly outside its canvas gets
-    // cropped, not crashed.
-    // =====================================================================
+    // Inline deliberately -- this is the innermost test of the lighting pixel
+    // walk, the occlusion march and Physics::RaycastDown's column scan.
+    bool IsSolid(int x, int y) const {
+        if (x < 0 || y < 0 || x >= m_Width || y >= m_Height) return false;
+        return m_Pixels[(static_cast<size_t>(y) * m_Width + x) * 4 + 3] > 0;
+    }
 
-    // Wipes the whole sprite back to transparent (RGBA all zero) and
-    // zeroes the lighting accumulation with it, so the next frame's mix
-    // starts clean instead of carrying weight from a pixel that used to be
-    // solid here. This is the "start a fresh frame of procedural art"
-    // call -- pair it with the DrawLimb/FillRect calls that rebuild the
-    // pose, then let DrawBody's automatic Flush() upload the result.
+    // --- Raster primitives: authoring a sprite from code, every frame. -------
+    // A procedural rig redraws a few hundred pixels per frame and can't pay a
+    // Lua->C++ boundary per pixel, so these do a whole shape in one call. All of
+    // them write the base buffer and mirror into the lit buffer, and all clamp
+    // to bounds -- a limb solved off-canvas gets cropped, not crashed.
+
+    // Back to fully transparent, lighting accumulation included, so next frame's
+    // mix doesn't carry weight from a pixel that used to be solid here.
     void Clear();
 
-    // Axis-aligned filled rectangle, (x, y) = top-left, fully overwriting
-    // (not blending) whatever was there. This is what draws anything that
-    // must NEVER rotate to stay on the pixel grid -- a knee block, a boot,
-    // a foot.
+    // Axis-aligned filled rect, (x, y) = top-left, overwriting rather than
+    // blending. Draws anything that must stay on the pixel grid: knee, boot, foot.
     void FillRect(int x, int y, int w, int h, const Color& color);
 
-    // A straight limb segment from (x0, y0) to (x1, y1), `thickness`
-    // texels wide, rasterized as one run per step along the segment's
-    // MAJOR axis: a near-vertical limb gets one horizontal run of
-    // `thickness` texels per row, a near-horizontal one gets one vertical
-    // run per column.
+    // A straight limb `thickness` texels wide, rasterized as one run per step
+    // along the segment's MAJOR axis. That scan is why this exists instead of a
+    // rotated quad: exactly one run per row/column means no diagonal pinholes,
+    // thickness is measured along a grid axis, and every edge lands on a texel
+    // boundary. A rotated quad's edges fall wherever the angle puts them, so the
+    // same limb shimmers between silhouettes as it moves.
     //
-    // That major-axis scan is the whole point, and it's why this exists
-    // instead of just rotating a quad: the result is gapless by
-    // construction (exactly one run per row/column, no diagonal pinholes),
-    // its thickness is measured along a grid axis rather than
-    // perpendicular to an arbitrary angle, and every edge lands on a texel
-    // boundary. A rotated quad has none of those properties -- its edges
-    // fall wherever the angle puts them, so the same limb shimmers between
-    // subtly different silhouettes frame to frame as the angle changes.
-    //
-    // Runs are centered by flooring (a run of width w at x covers
-    // x - w/2 .. x - w/2 + w - 1), consistently for every thickness, so
-    // segments of different widths chained end to end (thigh -> shin)
-    // share a center line instead of stepping sideways at the joint.
+    // Runs are floor-centered consistently at every thickness, so chained
+    // segments of different widths share a center line instead of stepping
+    // sideways at the joint.
     void DrawLimb(int x0, int y0, int x1, int y1, int thickness, const Color& color);
 
-        // DrawLimb with a thickness that varies along the segment: `t0` at
-    // (x0, y0), `t1` at (x1, y1), plus an optional smooth `bulge` of
-    // extra texels peaking at `bulgeAt` (0..1 along the bone).
-    //
-    // This is what stops a two-bone chain reading as two sticks. A real
-    // limb is widest near its root, swells over the muscle belly, and
-    // necks into the joint; a constant-width bar has none of that
-    // silhouette, and at 320x180 the silhouette is the entire character.
-    //
-    // Same major-axis scan and same floor-centered runs as DrawLimb, so
-    // a tapered segment still chains onto an untapered one (or a
-    // FillRect knee cap) sharing a center line, with no sideways step at
-    // the joint. Thickness is rounded per run, so the widening is a
-    // clean staircase rather than a dithered edge.
+    // DrawLimb with thickness varying from `t0` to `t1`, plus an optional smooth
+    // `bulge` peaking at `bulgeAt` (0..1 along the bone). This is what stops a
+    // two-bone chain reading as two sticks: at 320x180 the silhouette is the
+    // entire character. Same major-axis scan and floor-centered runs as DrawLimb,
+    // so tapered and untapered segments still chain without a sideways step.
     void DrawTaperedLimb(int x0, int y0, int x1, int y1,
                          int t0, int t1, float bulge, float bulgeAt,
                          const Color& color);
 
-    // Sets alpha to 0 for every pixel within radius of (cx, cy) -- the
-    // Noita-style "blow a hole in it" primitive. Leaves RGB untouched so a
-    // later SetPixel/inspection still sees the original color if alpha
-    // were ever restored.
+    // Alpha to 0 within radius of (cx, cy) -- the "blow a hole in it" primitive.
+    // RGB is left intact so the original color survives if alpha is restored.
     void PunchCircle(int cx, int cy, float radius);
 
-    // =====================================================================
-    // Lighting overlay -- LightingSystem-only (not exposed to Lua). Every
-    // pixel this class holds actually lives in TWO color buffers: m_Pixels
-    // is the authored "base" truth that SetPixel/GetPixel/IsSolid/
-    // PunchCircle above all read and write, exactly as before lighting
-    // existed at all. m_LitPixels mirrors it but with each frame's
-    // lighting mixed in on top -- it's what Flush() actually uploads to
-    // the GPU. Splitting these apart means lighting can recolor what's ON
-    // SCREEN every single frame (never baked, never destructive) without
-    // corrupting the pixel data any gameplay/destruction code actually
-    // queries.
+    // --- Lighting overlay: LightingSystem-only, not exposed to Lua. ----------
+    // Every pixel lives in two RGBA8 buffers. m_Pixels is the authored base that
+    // SetPixel/GetPixel/IsSolid/PunchCircle read and write; m_LitPixels mirrors
+    // it with this frame's lighting mixed in, and is what Flush() uploads.
+    // Splitting them lets lighting recolor the screen every frame, never
+    // destructively, without corrupting the data gameplay queries.
     //
-    // A third pair of buffers -- m_LightAccumColor/m_LightAccumWeight,
-    // float per pixel, NOT the GPU-facing RGBA8 the other two use -- holds
-    // this frame's raw, not-yet-resolved light contributions:
-    // m_LightAccumColor is a running SUM of `tint * strength` from every
-    // light that's touched this pixel so far this frame, and
-    // m_LightAccumWeight is the running sum of `strength` alone. Together
-    // they're everything needed to turn N overlapping lights' colors into
-    // one MIX rather than a wash: see AccumulateLightTint's comment below
-    // for the actual blend math.
-    //
-    // All four are seeded/cleared equal (lit == base, accum == 0) by both
-    // constructors and ResetLightingRect, so a sprite nothing ever lights
-    // still displays its authored colors exactly as before -- lighting is
-    // purely an overlay, never a prerequisite for correct rendering.
-    // =====================================================================
+    // A float pair, m_LightAccumColor/m_LightAccumWeight, holds this frame's raw
+    // contributions -- the running sums of tint*strength and of strength alone --
+    // which is what turns N overlapping lights into one mix rather than a wash.
+    // All four start equal (lit == base, accum == 0), so a sprite nothing lights
+    // still displays its authored colors.
 
-    // Copies base -> lit AND zeroes the accumulation buffers for every
-    // pixel in [minX,minY]..[maxX,maxY] (inclusive, clamped to bounds),
-    // discarding whatever this rect mixed in last frame. LightingSystem
-    // calls this once per frame, on whatever rect ITS OWN bookkeeping says
-    // was lit last frame, before re-accumulating this frame's lights -- so
-    // a torch that moved (or was removed) cleanly erases its own glow
-    // instead of leaving a stale tinted patch (or a stale weight that
-    // would bias the next mix) behind.
+    // Copies base -> lit and zeroes accumulation over the inclusive rect,
+    // discarding what it mixed in last frame. LightingSystem calls this on last
+    // frame's lit rect before re-accumulating, so a torch that moved erases its
+    // own glow instead of leaving a stale patch (or a stale weight) behind.
     void ResetLightingRect(int minX, int minY, int maxX, int maxY);
 
-    // Folds one light's contribution into pixel (x, y)'s running mix and
-    // immediately re-resolves m_LitPixels there, so the lit buffer is
-    // always valid to display/upload even mid-accumulation. No-op on a
-    // non-solid (fully transparent -- punched out, or simply never drawn)
-    // pixel; alpha itself is never touched, so lighting can never change
-    // what's solid.
+    // Folds one light into pixel (x, y)'s running mix and re-resolves
+    // m_LitPixels immediately, so the lit buffer is always valid mid-
+    // accumulation. No-op on a transparent pixel; alpha is never touched, so
+    // lighting can't change solidity.
     //
-    // This is a genuine MIX, not an add-and-clamp: `tint * strength` is
-    // folded into a running weighted-average light color (accumColor /
-    // accumWeight), and the pixel's own base color is blended toward that
-    // average by `saturate(accumWeight)` -- so a pixel barely grazed by
-    // one weak light stays close to its base color, a pixel sitting in
-    // one light's hotspot (weight >= 1) reads as that light's color
-    // outright rather than blowing out toward white, and a pixel touched
-    // by TWO differently-colored lights (say, a warm campfire and a cool
-    // spotlight) shows a genuine blend of both -- weighted by however much
-    // each one actually reached it -- instead of the two just summing
-    // into a wash. Multiple lights (or multiple rays from the SAME light
-    // re-touching a pixel already hit this frame) still stack naturally:
-    // each call adds into the same running sum, it just no longer sums
-    // past 1.0 in a way that erases hue. Call ResetLightingRect on this
-    // pixel's rect first if you want a clean "starting from base" mix.
+    // A genuine mix, not add-and-clamp: the base color blends toward the
+    // accumulated lights' weighted-average color by saturate(accumWeight). A
+    // pixel grazed by one weak light stays near its base; one in a hotspot reads
+    // as that light's color rather than blowing out toward white; one touched by
+    // a warm campfire and a cool spotlight shows a real blend of the two.
     void AccumulateLightTint(int x, int y, const Color& tint, float strength);
 
-    // Uploads whatever's changed since the last Flush() as one
-    // glTexSubImage2D over the accumulated dirty rect. Called automatically
-    // by DrawBody() right before it draws a sprite-backed body, so scripts
-    // don't need to remember to call this themselves -- exposed to Lua
-    // mainly as an escape hatch (e.g. forcing an upload before a manual
-    // Renderer2D draw call of your own).
+    // One glTexSubImage2D over the accumulated dirty rect. DrawBody() calls this
+    // automatically; it is exposed to Lua only as an escape hatch.
     void Flush();
 
     Texture* GetTexture() { return m_Texture.get(); }
@@ -187,18 +116,15 @@ private:
     void MarkDirty(int x, int y, int w, int h);
 
     int m_Width = 0, m_Height = 0;
-    std::vector<unsigned char> m_Pixels;    // RGBA8, row-major -- authored BASE truth
-    std::vector<unsigned char> m_LitPixels; // RGBA8, row-major -- base mixed with this-frame's lighting; what Flush() uploads
+    std::vector<unsigned char> m_Pixels;    // RGBA8, row-major -- authored base truth
+    std::vector<unsigned char> m_LitPixels; // RGBA8, row-major -- what Flush() uploads
 
-    // Per-pixel, float, row-major, NOT RGBA8 -- this frame's raw light
-    // accumulation, resolved into m_LitPixels by AccumulateLightTint on
-    // every write (see its comment) rather than held until some separate
-    // end-of-frame pass. RGB only (no alpha channel; lighting never
-    // touches solidity), so these are W*H entries each, not W*H*4.
-    std::vector<float> m_LightAccumColor;  // running sum of tint.rgb * strength, per pixel (3 floats/pixel: r,g,b)
-    std::vector<float> m_LightAccumWeight; // running sum of strength alone, per pixel (1 float/pixel)
+    // Resolved into m_LitPixels on every write rather than in an end-of-frame
+    // pass. RGB only, since lighting never touches solidity.
+    std::vector<float> m_LightAccumColor;  // sum of tint.rgb * strength (3 floats/pixel)
+    std::vector<float> m_LightAccumWeight; // sum of strength alone (1 float/pixel)
 
-    std::unique_ptr<Texture> m_Texture; // GPU mirror; null if PNG failed to load
+    std::unique_ptr<Texture> m_Texture; // GPU mirror; null if the PNG failed to load
 
     bool m_Dirty = false;
     int m_DirtyMinX = 0, m_DirtyMinY = 0, m_DirtyMaxX = 0, m_DirtyMaxY = 0;

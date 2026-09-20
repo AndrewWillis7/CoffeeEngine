@@ -41,30 +41,22 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
     m_Lua = luaL_newstate();
     luaL_openlibs(m_Lua);
 
-    // Make require() resolve against scripts/ as its root, so game code can
-    // split into modules (require("objects.Player") -> scripts/objects/Player.lua)
-    // instead of one monolithic main.lua. Prepended (not replaced) so the
-    // stock search locations luaL_openlibs already set up still work too.
-    // Engine-level infrastructure, same reasoning as KeyMap owning the
-    // hardcoded "scripts/keycodes.lua" path below -- a game script
-    // shouldn't have to remember to set this up itself.
+    // Prepend scripts/ to package.path so require("objects.Player") resolves to
+    // scripts/objects/Player.lua, keeping the stock search locations as fallback.
     lua_getglobal(m_Lua, "package");
     lua_getfield(m_Lua, -1, "path");
     std::string newPath = std::string("scripts/?.lua;scripts/?/init.lua;") + lua_tostring(m_Lua, -1);
     lua_pop(m_Lua, 1);
     lua_pushstring(m_Lua, newPath.c_str());
     lua_setfield(m_Lua, -2, "path");
-    lua_pop(m_Lua, 1); // pop package table
+    lua_pop(m_Lua, 1);
 
     KeyMap::LoadAndExposeToLua(m_Lua, "scripts/keycodes.lua");
 
-    // Binding Engine Subsystems -- see ScriptBindings.cpp for the actual
-    // per-type binding code (one file instead of one Register() call
-    // scattered across a dozen bindings headers).
     ScriptBindings::RegisterAll(m_Lua, context);
 
     if (luaL_dofile(m_Lua, scriptPath.c_str()) != LUA_OK) {
-        std::cerr << "Engine Fata: Failed to Load " << scriptPath << ": "
+        std::cerr << "Engine Fatal: failed to load " << scriptPath << ": "
                     << lua_tostring(m_Lua, -1) << "\n";
         lua_pop(m_Lua, 1);
         return;
@@ -96,12 +88,8 @@ void ScriptEngine::Reload() {
 
     Shutdown();
 
-    // LightingSystem::m_PrevLitRects holds raw RigidBody2D* left over
-    // from last frame -- Reset() MUST run before (or at least alongside)
-    // actors->Clear() below destroys those bodies, or the very next
-    // UpdateLighting() call's first pass dereferences freed memory. See
-    // LightingSystem::Reset()'s own comment for why dropping this
-    // bookkeeping (rather than trying to erase through it first) is safe.
+    // Order matters: LightingSystem caches raw RigidBody2D* from last frame, so it
+    // must drop them before actors->Clear() frees those bodies.
     if (m_Context->lighting) {
         m_Context->lighting->Reset();
     }

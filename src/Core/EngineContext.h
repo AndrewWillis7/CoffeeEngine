@@ -8,8 +8,7 @@ class UserInputService;
 class LightingSystem;
 class TerrainSystem;
 
-// Bundles pointers to engine subsystems that need exposing
-
+// Non-owning bundle of the engine subsystems exposed to Lua.
 struct EngineContext {
     IGraphicsContext* graphics = nullptr;
     IWindow* window = nullptr;

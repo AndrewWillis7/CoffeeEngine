@@ -1,25 +1,20 @@
 ---@meta
--- Single-file LuaLS/IDE definitions for every symbol ScriptBindings.cpp
--- injects into the Lua environment. Never loaded by the engine at
--- runtime -- IDE/type-checker use only.
+-- LuaLS/IDE definitions for every symbol ScriptBindings.cpp injects into the
+-- Lua environment. Never loaded at runtime; type-checker use only.
 --
--- No generator behind this (yet) -- keep it in sync by hand. Sections
--- below are in the same order as ScriptBindings::RegisterAll(), one
--- section per Register* function, so a diff of that function is a
--- checklist of what to update here.
+-- Kept in sync by hand -- there is no generator. Sections follow the order of
+-- ScriptBindings::RegisterAll(), one per Register* function, so a diff of that
+-- function is a checklist of what to update here.
 
--- =====================================================================
 -- Graphics -- bare globals bound to IGraphicsContext* (RegisterGraphics)
--- =====================================================================
 
 ---@param r number Red channel, 0.0 - 1.0
 ---@param g number Green channel, 0.0 - 1.0
 ---@param b number Blue channel, 0.0 - 1.0
 function SetClearColor(r, g, b) end
 
---- Legacy immediate-mode debug quad path (predates the shader-based
---- Renderer2D/DrawBody pipeline). Still present but not the normal way to
---- draw something -- prefer RigidBody2D + DrawBody for anything gameplay.
+--- Legacy immediate-mode debug path, predating the DrawBody pipeline. Prefer
+--- RigidBody2D + DrawBody for anything gameplay.
 ---@param x number
 ---@param y number
 ---@param width number
@@ -31,9 +26,7 @@ function SetClearColor(r, g, b) end
 ---@param a number|nil
 function DrawDebugQuad(x, y, width, height, rotationDegrees, r, g, b, a) end
 
--- =====================================================================
 -- Window -- eWindow global (RegisterWindow)
--- =====================================================================
 ---@class EngineWindow
 local EngineWindow = {}
 
@@ -44,9 +37,8 @@ function EngineWindow:GetHeight() end
 ---@param filepath string PNG path
 function EngineWindow:SetIcon(filepath) end
 
---- Standard EWMH fullscreen toggle on Linux (borderless-fullscreen on
---- Windows) -- stays correctly letterboxed/pillarboxed at any size,
---- never stretches. See main.lua's F11 handler for the usual call site.
+--- EWMH fullscreen on Linux, borderless on Windows. Stays correctly
+--- letterboxed at any size, never stretches.
 ---@param fullscreen boolean
 function EngineWindow:SetFullscreen(fullscreen) end
 ---@return boolean
@@ -56,9 +48,7 @@ function EngineWindow:IsFullscreen() end
 ---@type EngineWindow
 eWindow = nil
 
--- =====================================================================
 -- Vector2 -- value type (RegisterVector2)
--- =====================================================================
 ---@class Vector2
 ---@operator add(Vector2): Vector2
 ---@operator sub(Vector2): Vector2
@@ -97,9 +87,7 @@ function Vector2:Dot(other) end
 ---@return number
 function Vector2.Distance(a, b) end
 
--- =====================================================================
 -- RigidBody2D -- pointer type, owned by ActorRegistry (RegisterRigidBody2D)
--- =====================================================================
 ---@class RigidBody2D
 RigidBody2D = {}
 
@@ -228,9 +216,7 @@ function RigidBody2D:ResolveWindowBounds(windowWidth, windowHeight) end
 ---@param deltaTime number
 function RigidBody2D:UpdateCamera(deltaTime) end
 
--- =====================================================================
 -- Shader -- pointer type, owned by ActorRegistry (RegisterShader)
--- =====================================================================
 ---@class Shader
 Shader = {}
 
@@ -266,12 +252,8 @@ function Shader:GetOverdrawScale() end
 ---@param scale number
 function Shader:SetOverdrawScale(scale) end
 
--- =====================================================================
--- PixelSprite -- pointer type, owned by ActorRegistry (RegisterPixelSprite).
--- Not itself a runtime global -- the real global is `Sprite` below (only
--- exposes .Load). This type-only table exists purely so instance methods
--- have somewhere to attach for the type checker.
--- =====================================================================
+-- PixelSprite -- owned by ActorRegistry. Not a runtime global; the real global
+-- is `Sprite` below. This table exists only so methods have somewhere to attach.
 ---@class PixelSprite
 local PixelSprite = {}
 
@@ -316,13 +298,10 @@ function PixelSprite:Clear() end
 ---@param a number|nil Defaults to 1.0
 function PixelSprite:FillRect(x, y, w, h, r, g, b, a) end
 
---- A straight limb segment `thickness` texels wide, rasterized as one
---- run per step along the segment's MAJOR axis (horizontal runs per row
---- for a near-vertical limb). Gapless by construction, thickness
---- measured along a grid axis, every edge on a texel boundary -- the
---- on-the-grid replacement for rotating a quad. Runs are floor-centered
---- consistently for every thickness, so segments of different widths
---- chained end to end share a center line.
+--- A straight limb `thickness` texels wide, one run per step along the MAJOR
+--- axis: gapless by construction, thickness measured along a grid axis, every
+--- edge on a texel boundary -- the on-grid replacement for rotating a quad.
+--- Runs are floor-centred, so chained segments share a centre line.
 ---@param x0 integer
 ---@param y0 integer
 ---@param x1 integer
@@ -341,31 +320,22 @@ Sprite = {}
 ---@return PixelSprite
 function Sprite.Load(filepath) end
 
--- =====================================================================
 -- Renderer -- bare globals DrawBody(body) / SyncCamera() (RegisterRenderer)
--- =====================================================================
 
 --- Draws a RigidBody2D's flat-color quad, or -- if it has a PixelSprite
 --- attached -- flushes pending pixel edits and draws it textured instead.
 ---@param body RigidBody2D
 function DrawBody(body) end
 
---- Resolves ActorRegistry's currently-active camera (see
---- Actors.GetActiveCamera()) and pushes it into the renderer for the
---- rest of this frame's world-space draws -- including its targetAspect,
---- the "Border" named shader, and any attached border sprite (see
---- Actors.SetBorderSprite), so the letterbox/pillarbox margins get
---- whatever border effect is currently loaded -- or clears it if no
---- camera is active. Call once per frame (after any camera-follow
---- update, before your DrawBody() calls) -- deliberately NOT automatic
---- inside DrawBody() itself, which would re-resolve the active camera on
---- every single object drawn.
+--- Pushes the active camera into the renderer for the rest of this frame's
+--- world draws -- its targetAspect, the "Border" shader and any border sprite
+--- included -- or clears it if no camera is active. Call once per frame, after
+--- camera-follow and before DrawBody(). Deliberately not automatic inside
+--- DrawBody(), which would re-resolve the camera for every object drawn.
 function SyncCamera() end
 
--- =====================================================================
 -- CollisionShape2D -- pointer type, owned by ActorRegistry
 -- (RegisterCollisionShape2D)
--- =====================================================================
 ---@class CollisionShape2D
 CollisionShape2D = {}
 
@@ -385,10 +355,8 @@ function CollisionShape2D.NewCircle(radius, offsetX, offsetY) end
 ---@return string # "Box" or "Circle"
 function CollisionShape2D:GetType() end
 
--- =====================================================================
 -- PlayerActorConfig -- pointer type, owned by ActorRegistry
 -- (RegisterPlayerActorConfig)
--- =====================================================================
 ---@class PlayerActorConfig
 PlayerActorConfig = {}
 
@@ -410,9 +378,7 @@ function PlayerActorConfig:IsInputEnabled() end
 ---@param enabled boolean
 function PlayerActorConfig:SetInputEnabled(enabled) end
 
--- =====================================================================
 -- Camera2D -- pointer type, owned by ActorRegistry (RegisterCamera2D)
--- =====================================================================
 ---@class Camera2D
 Camera2D = {}
 
@@ -457,14 +423,11 @@ function Camera2D:SetActive(active) end
 
 ---@return integer
 function Camera2D:GetZoomOut() end
----@param zoom integer Multiplies viewportSize when framing the world (1 = unzoomed). Clamped to >= 1. Kept a whole number so every texel always scales by the same on-screen amount as its neighbors -- see Camera2D.h.
+---@param zoom integer Multiplies viewportSize (1 = unzoomed), clamped to >= 1. Whole numbers only, so every texel scales by the same on-screen amount.
 function Camera2D:SetZoomOut(zoom) end
 
--- =====================================================================
--- TerrainChunk -- pointer type, owned by ActorRegistry
--- (RegisterTerrainChunk). Attach via RigidBody2D:SetTerrain(). Normally
--- you don't touch this directly -- objects/terrain.lua wraps it.
--- =====================================================================
+-- TerrainChunk -- owned by ActorRegistry, attached via RigidBody2D:SetTerrain().
+-- Normally you don't touch this directly; objects/terrain.lua wraps it.
 ---@class TerrainChunk
 TerrainChunk = {}
 
@@ -665,9 +628,7 @@ function TerrainChunk:GetMaxStepHeight() end
 ---@param texels number Largest rise the body can climb in one resolution. Anything taller resolves horizontally instead (acts as a wall)
 function TerrainChunk:SetMaxStepHeight(texels) end
 
--- =====================================================================
 -- Terrain -- bare global (RegisterTerrainSystem)
--- =====================================================================
 
 --- Ticks every TerrainChunk: springs each grass blade toward the wind,
 --- applies disturbers, repaints blade pixels. Call once a frame AFTER
@@ -675,9 +636,7 @@ function TerrainChunk:SetMaxStepHeight(texels) end
 ---@param deltaTime number
 function UpdateTerrain(deltaTime) end
 
--- =====================================================================
 -- Actors -- ActorRegistry-wide queries (RegisterActorRegistry)
--- =====================================================================
 ---@class Actors
 Actors = {}
 
@@ -694,19 +653,17 @@ function Actors.GetActiveCamera() end
 ---@return Shader|nil # nil if nothing is registered under that name
 function Actors.GetNamedShader(name) end
 
---- Reads a .frag file off disk (paired with the engine's shared vertex
---- stage, scripts/shaders/quad.vert) and installs it under `name`,
---- REPLACING whatever's currently cached there. Also swappable at
---- runtime this way for e.g. "Border" -- see scripts/shaders/*.frag.
+--- Reads a .frag off disk, pairs it with scripts/shaders/quad.vert and installs
+--- it under `name`, REPLACING whatever is cached there. This is how "Border"
+--- and friends are swapped at runtime.
 ---@param name string
 ---@param fragmentPath string
 ---@return boolean success
 function Actors.LoadShaderFromFile(name, fragmentPath) end
 
---- Attaches a PixelSprite behind the letterbox/pillarbox margins,
---- drawn by SyncCamera() alongside the "Border" named shader whenever
---- that shader declares `uniform sampler2D u_Texture`. nil for no
---- texture (procedural border only, the default).
+--- Attaches a sprite behind the letterbox margins, drawn by SyncCamera()
+--- alongside the "Border" shader when that shader declares a u_Texture sampler.
+--- nil for the default procedural-only border.
 ---@param sprite PixelSprite|nil
 function Actors.SetBorderSprite(sprite) end
 
@@ -716,9 +673,7 @@ function Actors.GetBorderSprite() end
 --- Logs every RigidBody2D and what's attached to it to stdout.
 function Actors.Dump() end
 
--- =====================================================================
 -- Input -- polling input state (RegisterInput)
--- =====================================================================
 ---@class Input
 ---@field MouseLeft integer
 ---@field MouseRight integer
@@ -755,9 +710,7 @@ function Input.GetMousePosition() end
 ---@return integer[] # every keycode that went down this frame -- mainly a debugging aid for finding a key's raw code
 function Input.GetKeysPressedThisFrame() end
 
--- =====================================================================
 -- Physics -- engine-wide gravity (RegisterPhysics)
--- =====================================================================
 ---@class Physics
 Physics = {}
 
@@ -769,12 +722,9 @@ function Physics.SetGravity(x, y) end
 ---@return number y
 function Physics.GetGravity() end
 
--- =====================================================================
--- Keys -- scripts/keycodes.lua, loaded/exposed by KeyMap::LoadAndExposeToLua.
--- Not part of ScriptBindings.cpp, but every script touches it -- same
--- field shape on both platform tables in keycodes.lua, so one class
--- covers both.
--- =====================================================================
+-- Keys -- from scripts/keycodes.lua, exposed by KeyMap::LoadAndExposeToLua.
+-- Not part of ScriptBindings.cpp, but every script uses it. Both platform
+-- tables share a field shape, so one class covers both.
 ---@class Keys
 ---@field W integer
 ---@field A integer

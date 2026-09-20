@@ -1,26 +1,16 @@
 #version 120
 
-// Named shader "Border" -- the engine's DEFAULT letterbox/pillarbox
-// fill: a black night sky, sparse pixel-art stars fading in toward the
-// top, and dark grey smoke/cloud shapes drifting near the bottom.
-// Drawn by Renderer2D::SetActiveCamera as a single quad covering the
-// FULL real window, before the GL viewport narrows down to the
-// (possibly smaller, letterboxed) camera content rect -- so this is
-// what shows through in whatever margin space the aspect-fit leaves
-// behind. Paired with quad.vert like every other shader here;
-// v_LocalPos is [-0.5, 0.5] across the WHOLE window in this case (the
-// quad IS the window), not a single game object, since
-// Renderer2D::DrawScreenQuad sizes it to (m_Width, m_Height).
+// The default letterbox fill: a night sky with sparse stars toward the top and
+// grey smoke drifting near the bottom. Drawn as one quad covering the FULL
+// window before the viewport narrows to the camera's content rect, so this is
+// what shows through the margins. v_LocalPos therefore spans the whole window
+// rather than one game object.
 //
-// Everything below is quantized onto the native/virtual pixel grid
-// (via u_PixelScale, set by Renderer2D::SetActiveCamera every frame)
-// BEFORE any noise/star math runs, so stars and clouds render as flat,
-// chunky pixel-art blocks -- matching the on-grid look of the rest of
-// the game -- rather than smooth gradients, and stay pixel-perfect at
-// any real window size.
+// Everything is quantized onto the native pixel grid (via u_PixelScale) BEFORE
+// any noise runs, so stars and clouds render as flat chunky blocks matching the
+// rest of the game rather than smooth gradients, at any window size.
 //
-// Swap this out at runtime with your own .frag file (see
-// border_plain.frag for a minimal example) via:
+// Swap it at runtime -- border_plain.frag is a minimal example:
 //   Actors.LoadShaderFromFile("Border", "scripts/shaders/your_file.frag")
 
 uniform float u_Time;
@@ -71,14 +61,12 @@ float fbm(vec2 p) {
 void main() {
     float pixelScale = max(u_PixelScale, 1.0);
 
-    // Snap to the native/virtual pixel grid FIRST -- everything below
-    // reads from this grid-quantized position.
+    // Snap to the native grid FIRST; everything below reads this position.
     vec2 fragPixel = (v_LocalPos + 0.5) * u_Resolution;
     vec2 nativePixel = floor(fragPixel / pixelScale);
     float nativeHeight = u_Resolution.y / pixelScale;
 
-    // v: 0 at the top of the window, 1 at the bottom -- drives the
-    // vertical star/cloud density falloffs below.
+    // 0 at the top of the window, 1 at the bottom -- drives both falloffs.
     float v = nativePixel.y / max(nativeHeight, 1.0);
 
     vec3 col = u_SkyColor;
@@ -101,16 +89,11 @@ void main() {
     col += u_StarColor * star;
 
     // --- Clouds: soft fbm shapes, denser near the bottom, drifting ---
-    // Sampled on a coarser block grid than a single native pixel (see
-    // u_CloudBlockSize) -- a single native pixel's worth of quantization
-    // (like the star grid above) is too fine to read as chunky pixel art
-    // once u_PixelScale is small (a modest window size), since one
-    // native pixel can end up just 1-2 real screen pixels wide. Rounding
-    // DOWN to a multiple of the block size first means every pixel
-    // inside one block samples the exact same fbm value -- a flat color
-    // -- so the cloud's edge steps in visible chunky increments
-    // regardless of window size, the same dithered-cloud look classic
-    // pixel-art skies use, instead of a smooth gradient.
+    // Sampled on a coarser grid than a single native pixel: at a modest window
+    // size one native pixel can be 1-2 real pixels, too fine to read as chunky.
+    // Rounding down to a block first means every pixel in a block samples the
+    // same fbm value, so the cloud's edge steps in visible increments at any
+    // window size -- the dithered look classic pixel-art skies use.
     vec2 cloudBlock = floor(nativePixel / max(u_CloudBlockSize, 1.0)) * u_CloudBlockSize;
     vec2 cloudUV = (cloudBlock + vec2(u_Time * u_CloudSpeed, 0.0)) / max(u_CloudCellSize, 1.0);
     float density = smoothstep(0.42, 0.72, fbm(cloudUV));

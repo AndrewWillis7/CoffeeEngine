@@ -1,8 +1,8 @@
 #pragma once
 #include <cmath>
 
-// 2D Vector --> position, size, direction, velocity, pretty much anything with x,y
-// This one math type is a helper for transform and Rigidbody, AABB, Actor, Sprite, what have you
+// The engine's one 2D math type: position, size, direction, velocity.
+// Screen-space convention throughout -- +Y is down.
 struct Vector2 {
     float x = 0.0f;
     float y = 0.0f;
@@ -10,7 +10,6 @@ struct Vector2 {
     Vector2() = default;
     Vector2(float x_, float y_) : x(x_), y(y_) {}
 
-    // Arithmetic
     Vector2 operator+(const Vector2& other) const {return {x + other.x, y + other.y};}
     Vector2 operator-(const Vector2& other) const {return {x - other.x, y - other.y};}
     Vector2 operator*(float scalar) const {return {x * scalar, y * scalar};}
@@ -25,7 +24,6 @@ struct Vector2 {
     bool operator==(const Vector2& other) const {return x == other.x && y == other.y;}
     bool operator!=(const Vector2& other) const {return !(*this == other);}
 
-    // Metrics
     float LengthSquared() const { return x * x + y * y;}
     float Length() const { return std::sqrt(LengthSquared());}
 
@@ -36,22 +34,19 @@ struct Vector2 {
 
     float Dot(const Vector2& other) const { return x * other.x + y * other.y;}
 
-    // Rotates this vector by RADIANS (COUNTER-CLOCKWISE)
+    // Counter-clockwise, in radians.
     Vector2 Rotated(float radians) const {
         float c = std::cos(radians);
         float s = std::sin(radians);
         return {x * c - y * s, x * s + y * c};
     }
 
-    // Statistics
     static float Distance(const Vector2& a, const Vector2& b) {return (a - b).Length();}
     static Vector2 Lerp(const Vector2& a, const Vector2& b, float t) { return a + (b - a) * t;}
 
     static Vector2 Zero() {return {0.0f, 0.0f};}
     static Vector2 One() {return {1.0f, 1.0f};}
 
-    // Screen Space Coordinates
-    // "up" is -y
     static Vector2 Up() {return {0.0f, -1.0f};}
     static Vector2 Down() {return {0.0f, 1.0f};}
     static Vector2 Left() {return {-1.0f, 0.0f};}

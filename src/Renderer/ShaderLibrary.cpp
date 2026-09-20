@@ -4,10 +4,8 @@
 #include <iostream>
 
 namespace {
-// Every named/default shader in the engine pairs its fragment stage
-// against this one vertex stage -- see ShaderLibrary::SharedVertexSrc().
 constexpr const char* kSharedVertexPath = "scripts/shaders/quad.vert";
-} // End Of Namespace
+} // namespace
 
 std::unordered_map<std::string, ShaderLibrary::Entry>& ShaderLibrary::Table() {
     static std::unordered_map<std::string, Entry> table;
@@ -24,11 +22,8 @@ bool ShaderLibrary::ReadFile(const std::string& path, std::string& out) {
 }
 
 const std::string& ShaderLibrary::SharedVertexSrc() {
-    // Read once, lazily, the first time anything asks -- regardless of
-    // whether that's ActorRegistry's constructor or Renderer2D::Init(),
-    // whichever runs first (main.cpp constructs Renderer2D before
-    // ActorRegistry). Cached for the rest of the program's life since
-    // this vertex stage never changes at runtime.
+    // Read lazily, whichever of ActorRegistry's constructor or Renderer2D::Init()
+    // asks first, then cached -- this stage never changes at runtime.
     static const std::string src = [] {
         std::string text;
         if (!ReadFile(kSharedVertexPath, text)) {

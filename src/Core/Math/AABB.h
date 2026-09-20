@@ -2,8 +2,7 @@
 #include "Vector2.h"
 #include <cmath>
 
-// Axis-Aligned Bounding Box, defined by center + half-extents.
-// This covers simple collision which is cheap and can be calculated before any real collider instances
+// Axis-aligned bounding box, center + half-extents.
 struct AABB {
     Vector2 center;
     Vector2 halfExtents;

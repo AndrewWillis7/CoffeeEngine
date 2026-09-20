@@ -1,8 +1,6 @@
 #pragma once
 
-// Marks a rigidBody2D as the actor the player controls,
-// Holds the player physics properties
-
+// Marks a RigidBody2D as the player-controlled actor.
 class PlayerActorConfig {
 public:
     float moveSpeed = 200.0f;

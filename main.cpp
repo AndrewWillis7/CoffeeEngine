@@ -11,38 +11,29 @@
 #include <chrono>
 #include <iostream>
 
-// Include the basic GL headers to test a basic screen in main for now... (Remove later)
 #include <GL/gl.h>
 
 int main() {
-    std::cout << "Initializeing Engine..." << std::endl;
+    std::cout << "Initializing Engine..." << std::endl;
 
-    // Create Window outside of OS scope
     auto window = IWindow::Create("Engine Test Window", 800, 600);
 
-    // Create and initialize Graphics Context outside of OS scope
     auto graphicsContext = IGraphicsContext::Create(
         window->GetNativeDisplay(),
         window->GetNativeWindow()
     );
     graphicsContext->Init();
 
-    // Shader-based drawing pipeline. Lives outside OS
-    // Must be Initialized after graphics context
+    // Must be initialized after the graphics context.
     Renderer2D renderer2D;
     renderer2D.Init();
     renderer2D.SetViewportSize(window->GetWidth(), window->GetHeight());
 
-    // Owns Rigidbody, shader, collision shape, and player config creation at runtime
     ActorRegistry actorRegistry;
-
-    // Polling-style keyboard/mouse state, fed by the same window event callback below
     UserInputService inputService;
-
     LightingSystem lightingSystem;
-    TerrainSystem TerrainSystem;
+    TerrainSystem terrainSystem;
 
-    // Script Stuff
     EngineContext engineContext;
     engineContext.graphics = graphicsContext.get();
     engineContext.window = window.get();
@@ -50,7 +41,7 @@ int main() {
     engineContext.actors = &actorRegistry;
     engineContext.input = &inputService;
     engineContext.lighting = &lightingSystem;
-    engineContext.terrain = &TerrainSystem;
+    engineContext.terrain = &terrainSystem;
 
     ScriptEngine scriptEngine;
     scriptEngine.Init("scripts/main.lua", engineContext);
@@ -63,18 +54,11 @@ int main() {
         } else if (e.type == WindowEvent::Type::Resize) {
             renderer2D.SetViewportSize(e.width, e.height);
         }
-
-        // Keyboard/mouse events fall straight through; the service decides
-        // what to do with each type (see UserInputService::OnWindowEvent).
         inputService.OnWindowEvent(e);
     });
 
-    
-    // LOOP STUFF
-
     auto lastTime = std::chrono::high_resolution_clock::now();
 
-    // CORE LOOP (For now)
     while (!window->ShouldClose()) {
         auto currentTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<float> deltaDuration = currentTime - lastTime;
@@ -88,14 +72,13 @@ int main() {
         renderer2D.BeginFrame(deltaTime);
         scriptEngine.Update(deltaTime);
 
-        // Wire Engine Debug UI
         engineUI.Update(window->GetHeight());
         engineUI.Draw();
 
         graphicsContext->SwapBuffers();
 
-        // Clear this-frame Pressed/Released edges now that scripts have had
-        // a chance to read them -- next frame's PollEvents() starts them fresh.
+        // Scripts have read this frame's Pressed/Released edges; clear them so
+        // next frame's PollEvents() starts fresh.
         inputService.NewFrame();
     }
 

@@ -1,12 +1,7 @@
--- Builds the concrete Character instances (the player, NPCs) that
--- main.lua used to construct inline. Centralizes the shared default
--- leg-rig look here instead of leaving a ~60-line legConfig table
--- sitting in the middle of the scene script, and gives the player and
--- every NPC the exact same visual rig by construction, instead of two
--- copies of that table slowly drifting apart.
---
--- Per-instance overrides are still supported: pass your own legConfig
--- to either Create* function instead of relying on the default.
+-- Builds the concrete Character instances. Keeping the default leg-rig look
+-- here rather than inline in the scene gives the player and every NPC the same
+-- rig by construction, instead of two copies of a 60-line table drifting apart.
+-- Pass your own legConfig to either Create* function to override per instance.
 
 local Player = require("objects.player")
 local NPC = require("objects.npc")
@@ -18,8 +13,8 @@ CharacterFactory.DEFAULT_LEG_CONFIG = {
     -- Thigh: fullest just below the hip, necking down toward the knee.
     legging = { width = 3, endWidth = 2, height = 9, swell = 1, swellAt = 0.15,
                 color = {0.30, 0.33, 0.50} },
-    -- Cap matches legging.endWidth so it sits flush (no bead), and is
-    -- one row tall so it barely lengthens L1. Same colour as the thigh.
+    -- Matches legging.endWidth so it sits flush, one row tall so it barely
+    -- lengthens L1. Same colour as the thigh.
     knee    = { width = 2, height = 1, color = {0.30, 0.33, 0.50} },
     -- Shin: 1 texel at knee and ankle, 2 at the calf.
     -- L1 = 9 + 1 = 10, L2 = 10 -> balanced bones, full knee travel.
@@ -27,18 +22,14 @@ CharacterFactory.DEFAULT_LEG_CONFIG = {
                 color = {0.14, 0.12, 0.16} },
     foot    = { width = 4, height = 2 },
 
-    -- Sleeker build to match the torso's own taper (shoulderWidth 4 ->
-    -- waistWidth 2 in objects/torso.lua's Defaults) -- narrow enough
-    -- that the hip reads as a waistline continuing into the legs rather
-    -- than a separate wide block. rear 1 gives shape without the bustle;
-    -- taper is already at its max for width 4 (see LegRig:InitLegRig's
-    -- "deeper than half the block" clamp).
+    -- Narrow enough that the hip reads as a waistline continuing into the legs
+    -- rather than a separate block, matching the torso's own taper. rear 1 gives
+    -- shape without a bustle; taper is already at its max for width 4.
     hip     = { width = 4, height = 3, rise = 2, taper = 1, rear = 1, layer = "both" },
 
     legs = {
         { hipX =  1, phase = 0.0, layer = "front", shade = 1.00 },
-        -- 1px legs lose the far one fast on a dark stage; 0.70 was the floor
-        -- at the old thickness.
+        -- 1px legs lose the far one fast on a dark stage.
         { hipX = -1, phase = 0.5, layer = "back",  shade = 0.78 },
     },
 
@@ -56,9 +47,7 @@ CharacterFactory.DEFAULT_LEG_CONFIG = {
     pushHeight = 2,
     pushToe    = 2,
 
-    -- Sprint/crouch gait tuning -- see LegRig.Defaults.sprint/crouch for
-    -- what each field does. Defaults are fine here; listed for
-    -- visibility/tuning.
+    -- Defaults are fine; listed for visibility. See LegRig.Defaults.
     sprint = { strideScale = 1.35, stepHeightScale = 1.25 },
     crouch = { strideScale = 0.55, stepHeightScale = 0.45, sink = 3 },
 
@@ -72,24 +61,16 @@ CharacterFactory.DEFAULT_LEG_CONFIG = {
     },
 }
 
--- Default clothing shape: a plain undershirt (crew neck, full-length to
--- the hips) and no overshirt -- see objects/torso.lua's Defaults for
--- every other knob (shoulderWidth/waistWidth, neckline/hem for the
--- undershirt, thickness/length/flare for the cloak-style overshirt) and
--- pass a per-instance torsoConfig to either Create* function to override
--- it. Colors here are just the fallback used when `palette` is passed as
--- `false` (see applyPalette below) -- normally core/player_colors.lua
--- supplies them instead.
+-- Default clothing: a plain undershirt, no overshirt. See objects/torso.lua's
+-- Defaults for every other knob. The colors here are only the fallback for
+-- `palette = false` -- normally core/player_colors.lua supplies them.
 CharacterFactory.DEFAULT_TORSO_CONFIG = {
     undershirt = { enabled = true, color = {0.75, 0.20, 0.25, 1.0}, neckline = 0.28, hem = 1.0, width = 1.0 },
     overshirt  = { enabled = false },
 }
 
--- Shallow-copies `base` (a module config table like legConfig.legging or
--- torsoConfig.undershirt) with just its `color` replaced -- lets a
--- palette override color alone while every shape/tuning field (width,
--- height, taper, neckline, ...) stays whatever legConfig/torsoConfig
--- already specified.
+-- Shallow-copies a module config table with only its `color` replaced, so a
+-- palette overrides color alone and every shape field survives.
 local function withColor(base, color)
     if not color or not base then return base end
     local out = {}
@@ -98,13 +79,9 @@ local function withColor(base, color)
     return out
 end
 
--- Stamps a color palette (see core/player_colors.lua's shape: skin/
--- undershirt/overshirt/legging/knee/boot/hip) over a legConfig/
--- torsoConfig pair WITHOUT mutating either -- so the same shared
--- DEFAULT_LEG_CONFIG/DEFAULT_TORSO_CONFIG tables can be recolored
--- differently for the player and every NPC without their colors
--- bleeding into each other. Returns the (possibly new) legConfig,
--- torsoConfig pair.
+-- Stamps a palette over a legConfig/torsoConfig pair WITHOUT mutating either,
+-- so the shared DEFAULT_* tables can be recolored per character without the
+-- colors bleeding between them.
 local function applyPalette(legConfig, torsoConfig, palette)
     if not palette then return legConfig, torsoConfig end
 
@@ -124,11 +101,8 @@ local function applyPalette(legConfig, torsoConfig, palette)
     return leg, torso
 end
 
--- palette: a color table shaped like core/player_colors.lua, applied on
--- top of legConfig/torsoConfig's own colors. Defaults to
--- core/player_colors.lua when omitted; pass `false` to keep whatever
--- colors legConfig/torsoConfig already specify (or nothing, if using the
--- DEFAULT_* tables' own fallback colors) untouched.
+-- palette is applied over legConfig/torsoConfig's own colors, defaulting to
+-- core/player_colors.lua. Pass `false` to leave their colors untouched.
 function CharacterFactory.CreatePlayer(x, y, w, h, legConfig, torsoConfig, palette)
     legConfig = legConfig or CharacterFactory.DEFAULT_LEG_CONFIG
     torsoConfig = torsoConfig or CharacterFactory.DEFAULT_TORSO_CONFIG
@@ -137,13 +111,9 @@ function CharacterFactory.CreatePlayer(x, y, w, h, legConfig, torsoConfig, palet
     return Player.new(x, y, w, h, legConfig, torsoConfig)
 end
 
--- NB: Actors.GetPlayer() (C++ side) resolves to the first body
--- constructed with a PlayerActorConfig attached (see
--- ActorRegistry::GetPlayerActor) -- always call CreatePlayer before any
--- CreateNPC in a scene for that lookup to keep pointing at the right
--- character. See CreatePlayer's comment above for what `palette` does --
--- pass a different palette table (e.g. core/npc_colors.lua) here to give
--- an NPC a distinct look while sharing the same body shape.
+-- Actors.GetPlayer() resolves to the first body constructed with a
+-- PlayerActorConfig, so always call CreatePlayer before any CreateNPC. Pass a
+-- different palette here to give an NPC its own look on the same body shape.
 function CharacterFactory.CreateNPC(x, y, w, h, legConfig, torsoConfig, palette)
     legConfig = legConfig or CharacterFactory.DEFAULT_LEG_CONFIG
     torsoConfig = torsoConfig or CharacterFactory.DEFAULT_TORSO_CONFIG

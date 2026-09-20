@@ -1,8 +1,6 @@
--- Minimal single-inheritance class helper -- hand-rolled, not a third-party
--- OOP library, same "raw and explicit over a framework" spirit as the
--- engine's own C++ Lua bindings (LuaBinding.h ptr/value userdata pattern
--- instead of sol2). Every game object module (Player, and whatever follows
--- it) shares this so they all look and behave the same way.
+-- Minimal single-inheritance class helper, hand-rolled rather than a
+-- third-party OOP library -- the same raw-and-explicit spirit as the engine's
+-- own Lua bindings. Every game object module shares it, so they all look alike.
 --
 -- Usage, no inheritance:
 --   local Player = Class()

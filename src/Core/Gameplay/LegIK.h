@@ -1,15 +1,12 @@
 #pragma once
 
-// The numeric kernels behind objects/leg_rig.lua. Pure functions, no
-// state, no ownership -- every knob that decides POLICY (module sizes,
-// stride, stance ratio, which side the knee bends, where the hips sit)
-// stays in Lua and is passed in. This is the arithmetic only.
+// The numeric kernels behind objects/leg_rig.lua: pure functions, no state, no
+// ownership. Every policy knob -- module sizes, stride, stance ratio, which way
+// the knee bends, where the hips sit -- stays in Lua and is passed in.
 //
-// All of it is TEXEL space with +Y down, and everything that lands on a
-// joint is rounded half-up (floor(v + 0.5)) -- deliberately the same
-// rule quad.vert's u_PixelSnap uses, so a position computed here and a
-// position snapped by the vertex stage never disagree about which texel
-// they mean.
+// Texel space with +Y down. Anything landing on a joint is rounded half-up,
+// the same rule quad.vert's u_PixelSnap uses, so a position computed here and
+// one snapped by the vertex stage never disagree about which texel they mean.
 namespace LegIK {
 
 struct Joints {
@@ -21,11 +18,9 @@ struct Joints {
 // `side` is the signed side the knee is pushed toward (bend * facing in
 // Lua terms): +1 puts it in front of the actor, -1 behind it.
 //
-// The knee is rounded to a whole texel and the ankle is then RE-ANCHORED
-// onto that rounded knee, so the shin's drawn length matches its
-// authored length after quantization -- otherwise rounding the knee
-// silently stretches or shortens the bone by up to a texel, which reads
-// as the shin breathing while you walk.
+// The knee rounds to a whole texel and the ankle is then RE-ANCHORED onto it,
+// so the shin's drawn length matches its authored length after quantization --
+// otherwise rounding stretches the bone by up to a texel and the shin breathes.
 Joints SolveTwoBone(float hipX, float hipY,
                     float ankleX, float ankleY,
                     float L1, float L2, float side);
@@ -38,33 +33,27 @@ struct GaitSample {
     float roll  = 0.0f; // -1 heel .. 0 flat .. +1 toe
 };
 
-// `phase` in [0,1). The first (1 - stanceRatio) is SWING, the rest is
-// STANCE. Stance sweep is EXACTLY LINEAR and must stay that way -- it is
-// the half of the cycle where the foot touches the world, and any easing
-// there becomes visible sliding. All sweep shaping is in the swing.
+// `phase` in [0,1): the first (1 - stanceRatio) is SWING, the rest STANCE.
+// Stance sweep is EXACTLY LINEAR and must stay so -- it is the half of the
+// cycle where the foot touches the world, and any easing there reads as
+// sliding. All sweep shaping belongs in the swing.
 //
-// load/push/roll model the three rockers of a real stance phase:
-// weight acceptance (heel), single support (flat), pre-swing (toe). The
-// width of the two rocker windows is DERIVED from stanceRatio -- it is
-// exactly the double-support overlap, (2*stanceRatio - 1)/stanceRatio --
-// so there is no second knob that can fall out of sync with the gait.
-// For a two-legged opposed gait the two feet's loads sum to 1 by
-// construction, which is what lets the rig treat load as a weight share
+// load/push/roll model the three rockers of a real stance: weight acceptance
+// (heel), single support (flat), pre-swing (toe). The rocker windows are
+// DERIVED from stanceRatio -- exactly the double-support overlap -- so no
+// second knob can fall out of sync. For a two-legged opposed gait the two
+// loads sum to 1 by construction, so the rig can treat load as a weight share
 // without normalizing.
 GaitSample SampleGait(float phase, float stanceRatio, int swingFrames);
 
-// Largest sideways offset the knee can ever reach from the hip->ankle
-// line, sampled across d in [dMin, L1 + L2]. The closed-form bound
-// (L1 * L2 / |L1 - L2|) is correct but loose enough to overestimate the
-// stock player's leg canvas by more than half, and every texel it saves
-// is a texel the lighting pass doesn't walk on every light every frame.
-// Called once at rig construction, not per frame.
+// Largest sideways offset the knee can reach from the hip->ankle line, sampled
+// across d in [dMin, L1 + L2]. The closed form is correct but loose enough to
+// more than double the stock leg canvas, and every texel saved is one the
+// lighting pass doesn't walk. Called once at construction, not per frame.
 float KneeBulge(float L1, float L2, float dMin);
 
-// Framerate-independent exponential approach -- same shape as
-// Camera2D::Follow and RigidBody2D's drag, and for the same reason: a
-// plain current + (target - current) * rate * dt overshoots, and
-// oscillates once rate * dt > 1.
+// Framerate-independent exponential approach, same shape and reasoning as
+// Camera2D::Follow: the plain lerp form overshoots once rate * dt > 1.
 float Approach(float current, float target, float rate, float dt);
 
 } // namespace LegIK

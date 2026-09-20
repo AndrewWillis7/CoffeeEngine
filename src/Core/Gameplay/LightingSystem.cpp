@@ -6,78 +6,21 @@
 #include "../../Renderer/PixelSprite.h"
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
 
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
-// Occlusion-march tuning. This is now the ONLY thing that steps through
-// world space piece by piece -- see LightingSystem.h's header comment
-// for why "which pixels get lit" is no longer a ray sweep. It only needs
-// to be fine enough that a thin wall can't be stepped clean over; unlike
-// the old kStepPixels, it no longer has anything to do with how gapless
-// the lighting itself looks.
+// The only thing left that steps through world space piece by piece. It just has
+// to be fine enough that a thin wall cannot be stepped clean over; it no longer
+// has anything to do with how gapless the lighting itself looks.
 constexpr float kOcclusionStepPixels = 1.0f;
 
-// Inverse of the vertex shader's local->world quad transform (see
-// scripts/shaders/quad.vert and Renderer2D::ApplyCommonUniforms) -- maps
-// a WORLD point onto the pixel coordinates of `body`'s attached sprite.
-// Returns false (leaving outX/outY unset) if the body has no sprite or
-// the point falls outside its bounds.
-bool WorldToPixel(const RigidBody2D& body, const Vector2& worldPoint, int& outX, int& outY) {
-    if (!body.sprite) return false;
-
-    Vector2 d = worldPoint - body.transform.position;
-    // Skip the trig entirely for the (very common) unrotated case -- an
-    // unrotated body's local space IS world space, no need to pay for
-    // cos/sin on every single occlusion sample. Rotated<> is still
-    // correct here, this is purely a fast path for the same result.
-    Vector2 local = (body.transform.rotation == 0.0f) ? d : d.Rotated(-body.transform.rotation);
-
-    float sx = body.transform.scale.x != 0.0f ? body.transform.scale.x : 1.0f;
-    float sy = body.transform.scale.y != 0.0f ? body.transform.scale.y : 1.0f;
-    local.x /= sx; // undo the body's scale
-    local.y /= sy;
-
-    float px = local.x + body.size.x * 0.5f;
-    float py = local.y + body.size.y * 0.5f;
-    outX = static_cast<int>(std::floor(px));
-    outY = static_cast<int>(std::floor(py));
-
-    return outX >= 0 && outY >= 0 && outX < body.sprite->GetWidth() && outY < body.sprite->GetHeight();
-}
-
-// Exact inverse of WorldToPixel above -- given a pixel INDEX, returns
-// that texel's CENTER in world space (the (px+0.5, py+0.5) mirrors
-// WorldToPixel's floor(), so a world point that WorldToPixel maps to
-// (px, py) sits within half a texel of what this returns for the same
-// (px, py) -- close enough that distance/angle-to-light math on the
-// result reads as "this pixel's position", not an edge or a corner).
-// Every candidate-pixel lighting evaluation below is driven from THIS,
-// not from a ray sample -- see LightingSystem.h's header comment.
-Vector2 PixelToWorld(const RigidBody2D& body, int px, int py) {
-    float sx = body.transform.scale.x != 0.0f ? body.transform.scale.x : 1.0f;
-    float sy = body.transform.scale.y != 0.0f ? body.transform.scale.y : 1.0f;
-
-    float localX = (static_cast<float>(px) + 0.5f) - body.size.x * 0.5f;
-    float localY = (static_cast<float>(py) + 0.5f) - body.size.y * 0.5f;
-
-    Vector2 local(localX * sx, localY * sy); // redo the body's scale
-    // Same unrotated fast path as WorldToPixel above.
-    Vector2 rotated = (body.transform.rotation == 0.0f) ? local : local.Rotated(body.transform.rotation);
-    return body.transform.position + rotated;
-}
-
-// Conservative world-space AABB for a sprite-backed body's VISUAL extent
-// (size * scale, centered on transform.position) -- deliberately NOT
-// CollisionShape2D::GetWorldAABB (which can be smaller, larger, offset,
-// or simply absent -- e.g. an ArtObject has no collision shape at all,
-// but still wants to catch light). Padded out to the diagonal so a
-// rotated sprite's true footprint is never underestimated by this
-// broad-phase check -- same "conservative box, cheap to test" spirit
-// AABB.h already uses for collision.
+// Conservative world AABB for a sprite-backed body's VISUAL extent -- not
+// CollisionShape2D::GetWorldAABB, which can be smaller, offset, or absent (an
+// art object has no collider but still catches light). Padded to the diagonal so
+// a rotated sprite's footprint is never underestimated.
 AABB SpriteWorldAABB(const RigidBody2D& body) {
     Vector2 half = (body.size * body.transform.scale) * 0.5f;
     float diag = half.Length();
@@ -90,10 +33,8 @@ float Smoothstep01(float edge0, float edge1, float x) {
     return t * t * (3.0f - 2.0f * t);
 }
 
-// Two non-harmonic sine waves summed and clamped to roughly [-1, 1] --
-// reads as organic/irregular flicker instead of a single perfect sine's
-// metronome ticking. `seed` (derived per-light from its own config
-// pointer) keeps multiple torches from flickering in lockstep.
+// Two non-harmonic sines, so the flicker reads as organic rather than a single
+// sine's metronome. `seed` keeps multiple torches out of lockstep.
 float FlickerFactor(float time, float speed, float seed) {
     float t = time * speed;
     float wobble = std::sin(t + seed * 6.2831853f) * 0.6f
@@ -101,8 +42,7 @@ float FlickerFactor(float time, float speed, float seed) {
     return std::clamp(wobble, -1.0f, 1.0f);
 }
 
-// Normalizes a degree difference into (-180, 180] -- how far `angleDeg`
-// sits from `centerDeg`, signed, shortest way around the circle.
+// Signed degree difference, shortest way around the circle, in (-180, 180].
 float AngleDiffDeg(float angleDeg, float centerDeg) {
     float diff = angleDeg - centerDeg;
     while (diff > 180.0f) diff -= 360.0f;
@@ -110,51 +50,22 @@ float AngleDiffDeg(float angleDeg, float centerDeg) {
     return diff;
 }
 
-struct LightSample {
-    RigidBody2D* body = nullptr;
-    LightEmitterConfig* config = nullptr;
-};
+} // namespace
 
-// A lightBlocking body plus its world AABB, computed once per Update()
-// call and reused for every ray tested against it -- the box is the same
-// for every sample this frame, so recomputing it per occlusion sample (as
-// the old version implicitly did, by re-deriving it inside every
-// WorldToPixel call) was pure waste.
-struct Blocker {
-    RigidBody2D* body;
-    AABB box;
-};
-
-// True if some lightBlocking body's solid pixel sits strictly between
-// `from` (a light's world position) and `to` (a candidate pixel's world
-// position). `skipBody` is the LIGHT's own owning body -- excluded so a
-// body that both emits AND blocks (a lit lantern that's also solid,
-// say) never shadows its own glow, per RigidBody2D::lightBlocking's own
-// header comment ("blocking only affects OTHER lights' rays passing
-// through this body, never its own glow").
+// True if some blocker's solid pixel sits strictly between `from` (a light) and
+// `to` (a candidate pixel). `skipBody` is the light's OWN body, excluded so
+// something that both emits and blocks never shadows its own glow.
 //
-// Deliberately NOT the target pixel's own body: a solid, blocking body
-// SHOULD be able to shadow its own far side from an external light on
-// its near side (e.g. campfire light hitting one face of the wall
-// should not shine through the wall's own 16-texel bulk to light the
-// opposite face) -- that's the actual point of marking something
-// lightBlocking. Only the destination pixel's own immediate texel is
-// protected from self-occlusion, via marchLimit below stopping the
-// march a step short of `to`.
+// Deliberately not the target pixel's body: a solid wall SHOULD shadow its own
+// far side from a light on the near side -- that is the point of lightBlocking.
+// Only the destination texel itself is protected, by stopping a step short.
 //
-// PERFORMANCE: per blocker, the ray is first clipped against that
-// blocker's own world AABB (a standard slab test) BEFORE any stepping
-// happens, and the march (if any) only covers the clipped-in overlap,
-// not the full light-to-pixel distance. A ray that never crosses a
-// blocker's box now costs one slab test instead of `distance /
-// kOcclusionStepPixels` sample-and-lookup steps -- which is the
-// overwhelmingly common case, since most lit pixels have a clear line of
-// sight to the light. This is what took LightingSystem::Update from
-// ~9.5ms to ~1.3ms/frame on the shipped main.lua scene (see
-// LightingSystem.h's PERFORMANCE NOTE) -- occlusion sampling was, by
-// far, the most expensive part of a frame.
-bool IsOccluded(const Vector2& from, const Vector2& to, const RigidBody2D* skipBody,
-                 const std::vector<Blocker>& blockers) {
+// Per blocker the ray is slab-clipped against that blocker's world AABB before
+// any stepping, and only the clipped-in overlap is marched. A ray with clear
+// line of sight -- overwhelmingly the common case -- costs one slab test rather
+// than distance/kOcclusionStepPixels sample lookups.
+bool LightingSystem::IsOccluded(const Vector2& from, const Vector2& to, const RigidBody2D* skipBody,
+                                const std::vector<Blocker>& blockers) {
     if (blockers.empty()) return false;
 
     Vector2 delta = to - from;
@@ -167,26 +78,19 @@ bool IsOccluded(const Vector2& from, const Vector2& to, const RigidBody2D* skipB
     for (const Blocker& blocker : blockers) {
         if (blocker.body == skipBody) continue;
 
-        // Slab test: narrow [tEnter, tExit] -- the segment's own
-        // parameter range along `dir` -- down to just the portion (if
-        // any) that actually overlaps this blocker's box. Standard
-        // ray-vs-AABB clipping, done once per blocker per ray rather
-        // than once per SAMPLE per blocker per ray.
-        Vector2 boxMin = blocker.box.Min();
-        Vector2 boxMax = blocker.box.Max();
+        // Standard ray-vs-AABB clip, once per blocker per ray rather than once
+        // per sample per blocker per ray.
         float tEnter = kOcclusionStepPixels, tExit = marchLimit;
 
         for (int axis = 0; axis < 2; ++axis) {
             float origin = axis == 0 ? from.x : from.y;
             float d      = axis == 0 ? dir.x  : dir.y;
-            float lo     = axis == 0 ? boxMin.x : boxMin.y;
-            float hi     = axis == 0 ? boxMax.x : boxMax.y;
+            float lo     = axis == 0 ? blocker.boxMin.x : blocker.boxMin.y;
+            float hi     = axis == 0 ? blocker.boxMax.x : blocker.boxMax.y;
 
             if (std::abs(d) < 1e-6f) {
-                // Ray is parallel to this axis's pair of slab planes:
-                // either it's already inside the slab (origin between
-                // lo/hi, in which case this axis doesn't narrow the
-                // range at all) or it can never enter the box.
+                // Parallel to this slab: either already inside it (this axis
+                // doesn't narrow anything) or it can never enter the box.
                 if (origin < lo || origin > hi) { tEnter = 1.0f; tExit = 0.0f; break; }
                 continue;
             }
@@ -197,19 +101,29 @@ bool IsOccluded(const Vector2& from, const Vector2& to, const RigidBody2D* skipB
             tExit  = std::min(tExit,  tb);
             if (tEnter > tExit) break;
         }
-        if (tEnter > tExit) continue; // ray never enters this blocker's box at all
+        if (tEnter > tExit) continue; // ray never enters this blocker's box
 
         for (float traveled = tEnter; traveled < tExit; traveled += kOcclusionStepPixels) {
-            Vector2 sample = from + dir * traveled;
-            int px, py;
-            if (!WorldToPixel(*blocker.body, sample, px, py)) continue;
-            if (blocker.body->sprite->IsSolid(px, py)) return true;
+            float wx = from.x + dir.x * traveled;
+            float wy = from.y + dir.y * traveled;
+
+            // Inverse of the vertex shader's local->world quad transform, using
+            // the transform cached on the blocker.
+            float dx = wx - blocker.pos.x;
+            float dy = wy - blocker.pos.y;
+            float lx = dx, ly = dy;
+            if (blocker.rotated) {
+                lx = dx * blocker.cosNeg - dy * blocker.sinNeg;
+                ly = dx * blocker.sinNeg + dy * blocker.cosNeg;
+            }
+            int px = static_cast<int>(std::floor(lx * blocker.invScaleX + blocker.halfW));
+            int py = static_cast<int>(std::floor(ly * blocker.invScaleY + blocker.halfH));
+            if (px < 0 || py < 0 || px >= blocker.width || py >= blocker.height) continue;
+            if (blocker.sprite->IsSolid(px, py)) return true;
         }
     }
     return false;
 }
-
-} // namespace
 
 void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
     m_Time += deltaTime;
@@ -217,80 +131,93 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
     const auto& bodies = actors.GetBodies();
 
     // Pass 0: find every active light.
-    std::vector<LightSample> lights;
+    m_Lights.clear();
     for (const auto& bodyPtr : bodies) {
         RigidBody2D* body = bodyPtr.get();
-        if (body->lightEmitter) lights.push_back({body, body->lightEmitter});
+        if (body->lightEmitter) m_Lights.push_back({body, body->lightEmitter});
     }
 
-    // Pass 1: erase whatever LAST frame's lights touched, BEFORE this
-    // frame re-accumulates anything -- so a light that moved (or was
-    // removed/unset since last frame) doesn't leave a stale tinted patch
-    // sitting on a wall behind it.
+    // Pass 1: erase what LAST frame's lights touched, before this frame
+    // re-accumulates, so a light that moved leaves no stale patch behind.
     for (const LitRect& rect : m_PrevLitRects) {
         if (rect.body->sprite) rect.body->sprite->ResetLightingRect(rect.minX, rect.minY, rect.maxX, rect.maxY);
     }
 
-    if (lights.empty()) {
+    if (m_Lights.empty()) {
         m_PrevLitRects.clear();
         return;
     }
 
-    // Gathered once per Update() call, not once per light -- which
-    // bodies cast shadows doesn't depend on which light is asking, same
-    // "collect once, reuse" spirit as each light's own candidate scan.
-    // Each blocker's world AABB is computed here too (see the Blocker
-    // struct's comment) rather than re-derived per occlusion sample.
-    std::vector<Blocker> blockers;
+    // Which bodies cast shadows doesn't depend on which light is asking, so this
+    // is gathered once per frame, transforms and all.
+    m_Blockers.clear();
     for (const auto& bodyPtr : bodies) {
         RigidBody2D* body = bodyPtr.get();
-        if (body->sprite && body->lightBlocking) blockers.push_back({body, SpriteWorldAABB(*body)});
+        if (!body->sprite || !body->lightBlocking) continue;
+
+        AABB box = SpriteWorldAABB(*body);
+        const float rot = body->transform.rotation;
+        const float sx = body->transform.scale.x != 0.0f ? body->transform.scale.x : 1.0f;
+        const float sy = body->transform.scale.y != 0.0f ? body->transform.scale.y : 1.0f;
+
+        Blocker b;
+        b.body = body;
+        b.sprite = body->sprite;
+        b.boxMin = box.Min();
+        b.boxMax = box.Max();
+        b.pos = body->transform.position;
+        b.rotated = (rot != 0.0f);
+        b.cosNeg = b.rotated ? std::cos(-rot) : 1.0f;
+        b.sinNeg = b.rotated ? std::sin(-rot) : 0.0f;
+        b.invScaleX = 1.0f / sx;
+        b.invScaleY = 1.0f / sy;
+        b.halfW = body->size.x * 0.5f;
+        b.halfH = body->size.y * 0.5f;
+        b.width = body->sprite->GetWidth();
+        b.height = body->sprite->GetHeight();
+        m_Blockers.push_back(b);
     }
 
-    std::vector<LitRect> newLitRects;
+    m_LitRectScratch.clear();
 
-    // Pass 2: light every candidate pixel of every candidate body, for
-    // every light.
-    for (const LightSample& light : lights) {
+    // Pass 2: light every candidate pixel of every candidate body, per light.
+    for (const LightSample& light : m_Lights) {
         RigidBody2D* lightBody = light.body;
         LightEmitterConfig* cfg = light.config;
         if (cfg->radius <= 0.0f) continue;
 
-        // Per-light flicker sample for this frame -- computed once, not
-        // per-pixel, so one frame's lit region never has a seam from its
-        // own flicker (see LightEmitterConfig.h).
+        // Sampled once per light per frame, never per pixel, so a frame's lit
+        // region never seams from its own flicker.
         float seed = static_cast<float>(reinterpret_cast<uintptr_t>(cfg) % 10007) / 10007.0f;
         float flicker = cfg->flicker ? FlickerFactor(m_Time, cfg->flickerSpeed, seed) : 0.0f;
         float brightness = std::max(0.0f, cfg->brightness * (1.0f + flicker * cfg->flickerIntensityAmount));
+        if (brightness <= 0.0f) continue;
 
         Color color = cfg->color;
         if (cfg->flicker) {
-            float shift = std::max(0.0f, flicker); // only warms up on the flicker's upswing
+            float shift = std::max(0.0f, flicker); // only warms on the upswing
             color.r += cfg->flickerColorShift.r * shift;
             color.g += cfg->flickerColorShift.g * shift;
             color.b += cfg->flickerColorShift.b * shift;
         }
-        if (brightness <= 0.0f) continue;
 
-        Vector2 lightPos = lightBody->transform.position;
+        const Vector2 lightPos = lightBody->transform.position;
+        const float radius = cfg->radius;
+        const float radiusSq = radius * radius;
+        const float invRadius = 1.0f / radius;
 
-        // Broad-phase: which sprite-backed bodies are even worth
-        // per-pixel testing for this light -- see the PERFORMANCE NOTE in
-        // LightingSystem.h.
-        std::vector<RigidBody2D*> candidates;
+        // Broad-phase: which sprite-backed bodies are worth per-pixel testing.
+        m_Candidates.clear();
         for (const auto& bodyPtr : bodies) {
             RigidBody2D* candidate = bodyPtr.get();
             if (!candidate->sprite) continue;
             AABB box = SpriteWorldAABB(*candidate);
-            float reach = cfg->radius + box.halfExtents.x; // box is a (diag,diag) square, either axis works
+            float reach = radius + box.halfExtents.x; // square box, either axis works
             if (Vector2::Distance(lightPos, box.center) > reach) continue;
-            candidates.push_back(candidate);
+            m_Candidates.push_back(candidate);
         }
-        if (candidates.empty()) continue;
+        if (m_Candidates.empty()) continue;
 
-        // Cone-only aim: center direction in degrees, optionally riding
-        // the owning body's own rotation (see LightEmitterConfig::
-        // useOwnerRotation), and the full angular width of the wedge.
         bool isCone = cfg->type == LightEmitterConfig::Type::Cone;
         float dirDeg = 0.0f, sweepDeg = 360.0f;
         if (isCone) {
@@ -299,45 +226,52 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
             sweepDeg = std::max(0.0f, cfg->coneAngleRad * kRadToDeg);
         }
         if (sweepDeg <= 0.0f) continue;
-        float halfAngleDeg = sweepDeg * 0.5f;
+        const float halfAngleDeg = sweepDeg * 0.5f;
+        const float coneFadeStart = halfAngleDeg * 0.8f;
 
-        // Per-light accumulation of "which body, what pixel rect did THIS
-        // light touch" -- flushed into newLitRects once this light is done.
-        std::unordered_map<RigidBody2D*, LitRect> touched;
+        // std::pow dominates the per-lit-pixel cost at the two exponents anyone
+        // actually uses, so special-case them.
+        const float falloffExp = cfg->falloffExponent;
+        const int falloffMode = (falloffExp == 2.0f) ? 2 : (falloffExp == 1.0f) ? 1 : 0;
 
-        for (RigidBody2D* candidate : candidates) {
+        const int toneSteps = cfg->toneSteps;
+        const float toneStepsF = static_cast<float>(toneSteps);
+        const float invToneSteps = toneSteps > 0 ? 1.0f / toneStepsF : 0.0f;
+
+        for (RigidBody2D* candidate : m_Candidates) {
             PixelSprite* sprite = candidate->sprite;
-            int w = sprite->GetWidth();
-            int h = sprite->GetHeight();
+            const int w = sprite->GetWidth();
+            const int h = sprite->GetHeight();
 
-            // Clamp the pixel walk to the rect this light's world-space
-            // circle can actually reach on THIS candidate, instead of
-            // the whole sprite -- computed by pushing the light's world
-            // AABB corners (center +/- radius on each axis) through the
-            // same inverse transform WorldToPixel uses, then taking the
-            // min/max. Affine transform, so this stays a conservative
-            // (possibly slightly larger than the true circle, never
-            // smaller) bound even under rotation/scale. A light tucked
-            // in the corner of a large floor no longer walks every pixel
-            // of it, only the ones anywhere near its reach -- see
-            // LightingSystem.h's PERFORMANCE NOTE.
-            int rminX = 0, rminY = 0, rmaxX = w - 1, rmaxY = h - 1;
+            // Local->world transform, hoisted out of the pixel loops.
+            const Vector2 cpos = candidate->transform.position;
+            const float crot = candidate->transform.rotation;
+            const bool rotated = (crot != 0.0f);
+            const float cosR = rotated ? std::cos(crot) : 1.0f;
+            const float sinR = rotated ? std::sin(crot) : 0.0f;
+            const float csx = candidate->transform.scale.x != 0.0f ? candidate->transform.scale.x : 1.0f;
+            const float csy = candidate->transform.scale.y != 0.0f ? candidate->transform.scale.y : 1.0f;
+            const float chalfW = candidate->size.x * 0.5f;
+            const float chalfH = candidate->size.y * 0.5f;
+
+            // Clamp the pixel walk to the rect this light's circle can actually
+            // reach on THIS candidate, by pushing the light's world AABB corners
+            // through the inverse transform. Affine, so the bound stays
+            // conservative under rotation and scale -- never too small. A light
+            // in the corner of a large floor no longer walks every pixel of it.
+            int rminX, rminY, rmaxX, rmaxY;
             {
-                float r = cfg->radius;
-                float cornerX[4] = {lightPos.x - r, lightPos.x + r, lightPos.x - r, lightPos.x + r};
-                float cornerY[4] = {lightPos.y - r, lightPos.y - r, lightPos.y + r, lightPos.y + r};
+                const float cornerX[4] = {lightPos.x - radius, lightPos.x + radius,
+                                          lightPos.x - radius, lightPos.x + radius};
+                const float cornerY[4] = {lightPos.y - radius, lightPos.y - radius,
+                                          lightPos.y + radius, lightPos.y + radius};
                 float loX = 1e30f, hiX = -1e30f, loY = 1e30f, hiY = -1e30f;
 
-                float sx = candidate->transform.scale.x != 0.0f ? candidate->transform.scale.x : 1.0f;
-                float sy = candidate->transform.scale.y != 0.0f ? candidate->transform.scale.y : 1.0f;
-
                 for (int i = 0; i < 4; ++i) {
-                    Vector2 d(cornerX[i] - candidate->transform.position.x,
-                              cornerY[i] - candidate->transform.position.y);
-                    Vector2 local = (candidate->transform.rotation == 0.0f)
-                                   ? d : d.Rotated(-candidate->transform.rotation);
-                    float pxf = local.x / sx + candidate->size.x * 0.5f;
-                    float pyf = local.y / sy + candidate->size.y * 0.5f;
+                    Vector2 d(cornerX[i] - cpos.x, cornerY[i] - cpos.y);
+                    Vector2 local = rotated ? d.Rotated(-crot) : d;
+                    float pxf = local.x / csx + chalfW;
+                    float pyf = local.y / csy + chalfH;
                     loX = std::min(loX, pxf); hiX = std::max(hiX, pxf);
                     loY = std::min(loY, pyf); hiY = std::max(hiY, pyf);
                 }
@@ -347,68 +281,82 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
                 rmaxY = std::min(h - 1, static_cast<int>(std::ceil(hiY)));
             }
 
+            // This light's touched rect on this candidate, accumulated locally
+            // and pushed once -- each candidate is visited exactly once here.
+            bool touched = false;
+            int tMinX = 0, tMinY = 0, tMaxX = 0, tMaxY = 0;
+
             for (int py = rminY; py <= rmaxY; ++py) {
+                const float ly = ((static_cast<float>(py) + 0.5f) - chalfH) * csy;
+
                 for (int px = rminX; px <= rmaxX; ++px) {
                     if (!sprite->IsSolid(px, py)) continue;
 
-                    Vector2 worldPos = PixelToWorld(*candidate, px, py);
-                    float dist = Vector2::Distance(lightPos, worldPos);
-                    if (dist > cfg->radius) continue;
+                    const float lx = ((static_cast<float>(px) + 0.5f) - chalfW) * csx;
+                    const Vector2 worldPos = rotated
+                        ? Vector2(cpos.x + lx * cosR - ly * sinR, cpos.y + lx * sinR + ly * cosR)
+                        : Vector2(cpos.x + lx, cpos.y + ly);
 
-                    // Soft cone edge: full strength across the inner 80%
-                    // of the arc, smoothly fading to zero at the
-                    // boundary, so a spotlight doesn't have a razor-sharp
-                    // cutoff. No-op (always 1.0) for Point lights.
+                    // Squared first -- the sqrt is only paid by pixels that are
+                    // actually in range, not by the whole bounding rect.
+                    const float toX = worldPos.x - lightPos.x;
+                    const float toY = worldPos.y - lightPos.y;
+                    const float distSq = toX * toX + toY * toY;
+                    if (distSq > radiusSq) continue;
+
+                    // Soft cone edge: full strength across the inner 80% of the
+                    // arc, fading to zero at the boundary. Always 1 for a Point.
                     float angularFactor = 1.0f;
                     if (isCone) {
-                        Vector2 toPixel = worldPos - lightPos;
-                        if (toPixel.LengthSquared() > 0.0001f) {
-                            float angleDeg = std::atan2(toPixel.y, toPixel.x) * kRadToDeg;
-                            float distFromCenterDeg = std::abs(AngleDiffDeg(angleDeg, dirDeg));
-                            if (distFromCenterDeg > halfAngleDeg) continue; // outside the wedge entirely
-                            angularFactor = 1.0f - Smoothstep01(halfAngleDeg * 0.8f, halfAngleDeg, distFromCenterDeg);
+                        if (distSq > 0.0001f) {
+                            float angleDeg = std::atan2(toY, toX) * kRadToDeg;
+                            float offCenterDeg = std::abs(AngleDiffDeg(angleDeg, dirDeg));
+                            if (offCenterDeg > halfAngleDeg) continue; // outside the wedge
+                            angularFactor = 1.0f - Smoothstep01(coneFadeStart, halfAngleDeg, offCenterDeg);
+                            if (angularFactor <= 0.0f) continue;
                         }
-                        // else: pixel sits right on top of the light's
-                        // own position -- direction is undefined, treat
-                        // as dead-center (angularFactor stays 1.0).
+                        // else: pixel sits on the light itself, direction is
+                        // undefined -- treat it as dead-center.
                     }
-                    if (angularFactor <= 0.0f) continue;
 
-                    // Shadow test -- see IsOccluded's comment. Only now,
-                    // after the cheap distance/angle checks above already
-                    // ruled most pixels out, because this is the
-                    // expensive part.
-                    if (IsOccluded(lightPos, worldPos, lightBody, blockers)) continue;
+                    // Only now, after the cheap rejections: this is the expensive part.
+                    if (IsOccluded(lightPos, worldPos, lightBody, m_Blockers)) continue;
 
-                    float falloffT = std::clamp(dist / cfg->radius, 0.0f, 1.0f);
-                    if (cfg->toneSteps > 0) {
-                        // Round DOWN to the nearest 1/toneSteps -- turns
-                        // the smooth gradient into toneSteps flat
-                        // concentric rings instead. See
-                        // LightEmitterConfig::toneSteps's comment.
-                        float steps = static_cast<float>(cfg->toneSteps);
-                        falloffT = std::floor(falloffT * steps) / steps;
+                    const float dist = std::sqrt(distSq);
+                    float falloffT = dist * invRadius;
+                    if (falloffT > 1.0f) falloffT = 1.0f;
+                    if (toneSteps > 0) {
+                        // Round DOWN to the nearest 1/toneSteps, turning the
+                        // gradient into flat concentric rings.
+                        falloffT = std::floor(falloffT * toneStepsF) * invToneSteps;
                     }
-                    float strength = brightness * angularFactor * std::pow(1.0f - falloffT, cfg->falloffExponent);
+
+                    const float base = 1.0f - falloffT;
+                    const float falloff = (falloffMode == 2) ? base * base
+                                        : (falloffMode == 1) ? base
+                                        : std::pow(base, falloffExp);
+                    const float strength = brightness * angularFactor * falloff;
                     if (strength <= 0.0f) continue;
 
                     sprite->AccumulateLightTint(px, py, color, strength);
 
-                    auto it = touched.find(candidate);
-                    if (it == touched.end()) {
-                        touched[candidate] = LitRect{candidate, px, py, px, py};
+                    if (!touched) {
+                        touched = true;
+                        tMinX = tMaxX = px;
+                        tMinY = tMaxY = py;
                     } else {
-                        it->second.minX = std::min(it->second.minX, px);
-                        it->second.minY = std::min(it->second.minY, py);
-                        it->second.maxX = std::max(it->second.maxX, px);
-                        it->second.maxY = std::max(it->second.maxY, py);
+                        if (px < tMinX) tMinX = px;
+                        if (px > tMaxX) tMaxX = px;
+                        if (py < tMinY) tMinY = py;
+                        if (py > tMaxY) tMaxY = py;
                     }
                 }
             }
-        }
 
-        for (auto& [body, rect] : touched) newLitRects.push_back(rect);
+            if (touched) m_LitRectScratch.push_back(LitRect{candidate, tMinX, tMinY, tMaxX, tMaxY});
+        }
     }
 
-    m_PrevLitRects = std::move(newLitRects);
+    // Swap rather than assign, so both vectors keep their capacity for next frame.
+    m_PrevLitRects.swap(m_LitRectScratch);
 }

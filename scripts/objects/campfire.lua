@@ -1,8 +1,5 @@
--- Wraps a RigidBody2D + LightEmitterConfig as a single game object, same
--- pattern Camera.lua uses for RigidBody2D + Camera2D. A small solid
--- ember-colored square that emits a flickering orange/yellow point
--- light -- the concrete "campfire" starting point for the lighting
--- system (see Core/Gameplay/LightingSystem.h).
+-- A RigidBody2D plus a LightEmitterConfig: a small ember-colored square that
+-- emits a flickering orange point light.
 
 local Class = require("core.Class")
 

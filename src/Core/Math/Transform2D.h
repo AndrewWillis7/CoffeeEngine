@@ -1,8 +1,7 @@
 #pragma once
 #include "Vector2.h"
 
-// Position + Rotation + scale
-// Conversion to LUA should handle Degrees/Radians Conversion at the Boundary, not here honestly
+// Rotation is radians; the Lua bindings convert at the boundary.
 struct Transform2D {
     Vector2 position;
     float rotation = 0.0f;

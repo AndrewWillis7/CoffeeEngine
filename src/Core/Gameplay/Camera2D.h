@@ -3,121 +3,64 @@
 
 class RigidBody2D;
 
-// Marks a RigidBody2D as a camera. Attached the same way Shader/
-// CollisionShape2D/PlayerActorConfig are -- a non-owning pointer on the
-// RigidBody2D (see RigidBody2D::camera), instance owned and kept alive by
-// ActorRegistry.
+// Marks a RigidBody2D as a camera; owned by ActorRegistry, attached via a
+// non-owning RigidBody2D::camera pointer like every other capability tag.
 //
-// Deliberately has NO position field of its own: the owning body's
-// transform.position IS the camera's world-space center. Move the body
-// (SetPosition, physics, Follow() below, whatever) and the camera moves
-// with it -- same "the RigidBody2D is the actor" convention the rest of
-// the engine already uses for Shader/CollisionShape2D/PlayerActorConfig.
+// Deliberately has no position of its own -- the owning body's
+// transform.position IS the camera's world-space center.
 class Camera2D {
 public:
-    // World units visible across the full window, regardless of the
-    // window's actual pixel resolution -- this IS the "resolution
-    // control" knob. A small viewport (e.g. 320x180) makes every world
-    // pixel draw several screen pixels wide, filling whatever size the
-    // window happens to be with clean, uniformly-scaled pixel art.
-    // Larger values zoom out (more world visible, each world pixel drawn
-    // smaller); smaller values zoom in. X and Y are independent, so a
-    // viewport whose aspect ratio doesn't match the window's will stretch
-    // -- picking a viewport aspect that matches your target window (or
-    // updating it on resize) is on the caller for now.
+    // World units visible across the full window, independent of the window's
+    // real pixel resolution: this is the resolution knob. A small viewport
+    // (320x180) makes every world texel draw several screen pixels wide. X and Y
+    // are independent, so a viewport whose aspect doesn't match the window's
+    // stretches -- matching it (or updating on resize) is the caller's job.
     Vector2 viewportSize = Vector2(320.0f, 180.0f);
 
-    // Optional second aspect-ratio constraint, independent of viewportSize.
-    // Zero (default, either component) means "not set" -- the camera's
-    // content is fit directly against the real window using viewportSize's
-    // own aspect, one level of letterbox/pillarbox sized to whatever the
-    // window/monitor happens to be shaped like.
-    //
-    // Set both components (e.g. SetTargetAspect(16, 9)) to force the
-    // camera's output to live inside a region of that SHAPE instead,
-    // regardless of viewportSize's own aspect -- e.g. a 1:1 50x50
-    // viewportSize with a 16:9 targetAspect renders as a square, pillar-
-    // boxed inside a 16:9 rectangle, which is itself letterboxed/
-    // pillarboxed against the real window if the window's own aspect
-    // doesn't match 16:9 either. Renderer2D does this as a single nested
-    // fit (see its FitAspect helper) -- never a non-uniform stretch on
-    // either level.
+    // Optional second aspect constraint. Zero (either component) means unset:
+    // content is fit against the real window using viewportSize's own aspect.
+    // Set both (SetTargetAspect(16, 9)) to force output into a region of that
+    // shape instead -- a 1:1 viewport at 16:9 renders square, pillarboxed inside
+    // a 16:9 rect, itself letterboxed against the window. Renderer2D does this as
+    // one nested fit, never a non-uniform stretch.
     Vector2 targetAspect = Vector2::Zero();
 
-    // Non-owning. Set via Lua's camera:SetFollowTarget(body) (nil to stop
-    // following). Same lifetime convention as every other cross-reference
-    // in this engine (RigidBody2D::shader, etc.) -- owned and kept alive
-    // elsewhere (ActorRegistry), this is just a pointer.
+    // Non-owning, set from Lua via camera:SetFollowTarget(body).
     RigidBody2D* followTarget = nullptr;
 
-    // World-space offset from followTarget's position that the camera
-    // actually leans toward -- e.g. Vector2(0, -40) frames the camera 40
-    // pixels ABOVE the player instead of dead-centered on them (more
-    // headroom to see what's coming in a platformer, less wasted space
-    // below). Zero (default) reproduces the old dead-centered behavior
-    // exactly. Follows the same "+y is down" convention as everything
-    // else (see Vector2.h) -- negative Y moves the framing UP. Only
-    // applies via Follow() below; has no effect if you're driving the
-    // camera body's position by hand (followTarget == nullptr).
+    // World-space offset from followTarget that the camera actually leans
+    // toward: Vector2(0, -40) frames 40px above the player (+Y is down). Only
+    // applies through Follow().
     Vector2 focusOffset = Vector2::Zero();
 
-    // Exponential-decay follow rate (per second), NOT a 0..1 blend factor
-    // -- this keeps Follow() frame-rate independent (see the .cpp). 0 means
-    // "don't move on your own" (Follow() becomes a no-op; drive the body's
-    // position by hand instead, e.g. an editor-style scroll camera).
-    // Higher values catch up to the target faster; very large values
-    // approach an instant snap.
+    // Exponential-decay rate per second, NOT a 0..1 blend factor -- that is what
+    // keeps Follow() framerate-independent. 0 disables it entirely, for a camera
+    // body you drive by hand.
     float followSmoothing = 5.0f;
 
-    // Only one camera actually drives rendering at a time -- same
-    // "current" convention Godot's Camera2D uses. ActorRegistry::
-    // GetActiveCamera() returns the first body whose attached Camera2D
-    // has active == true.
+    // Only one camera drives rendering at a time; GetActiveCamera() returns the
+    // first body whose Camera2D has this set.
     bool active = true;
 
-    // Integer runtime zoom-out, layered ON TOP of viewportSize rather
-    // than replacing it. viewportSize stays exactly what it's always
-    // been -- the NATIVE/reference texel resolution the art was designed
-    // at (e.g. 640x360, see scripts/core/constants.lua) -- so gameplay
-    // code never has to remember and restore a "base" number after
-    // zooming; it just dials zoomOut up or down and viewportSize is
-    // never touched.
+    // Integer zoom layered on top of viewportSize rather than replacing it, so
+    // viewportSize stays the native texel resolution the art was authored at and
+    // gameplay code never has to restore a "base" value. 1 shows viewportSize
+    // texels; 2 shows twice as much world, so each texel draws half size.
     //
-    // 1 (default) shows exactly viewportSize texels -- unzoomed. 2 shows
-    // viewportSize*2 texels along each axis, i.e. twice as much world
-    // fits in the same on-screen content rect, so every texel draws at
-    // HALF its native on-screen size ("zoomed out"). Kept a whole number
-    // deliberately: since Renderer2D letterboxes a FIXED content rect
-    // (see Renderer2D::SetActiveCamera), "how many texels are visible"
-    // and "how big one texel draws on screen" are the same dial, just
-    // read in reciprocal units -- a non-integer zoom would make that
-    // dial land between two texels' worth of screen space, so some
-    // texels would draw a fraction of a screen pixel differently than
-    // their neighbors (uneven/blurry chunky pixel art). Whole-number
-    // zoom guarantees every texel always scales by the exact same
-    // on-screen amount as every other texel.
-    //
-    // Not a public field like viewportSize/targetAspect above --
-    // SetZoomOut() clamps to >= 1 so a stray 0/negative value from a
-    // script can never collapse or invert the camera's framing.
+    // Whole numbers only, deliberately: Renderer2D letterboxes a fixed content
+    // rect, so a fractional zoom would land between texels and some would take a
+    // different fraction of a screen pixel than their neighbours -- uneven,
+    // blurry pixel art. Clamped to >= 1 so a stray 0 can't collapse the framing.
     int GetZoomOut() const { return m_ZoomOut; }
     void SetZoomOut(int zoom) { m_ZoomOut = zoom > 0 ? zoom : 1; }
 
-    // What Renderer2D::SetActiveCamera actually gets fed each frame (see
-    // ScriptBindings.cpp's Lua_SyncCamera) -- viewportSize scaled by the
-    // current zoom. Any caller that wants "what's visible RIGHT NOW"
-    // should read this, not viewportSize directly.
+    // What's visible right now -- read this rather than viewportSize directly.
     Vector2 EffectiveViewportSize() const {
         return viewportSize * static_cast<float>(m_ZoomOut);
     }
 
-    // Moves `selfBody` (the RigidBody2D this Camera2D is attached to)
-    // toward followTarget's position (plus focusOffset above) by
-    // followSmoothing, scaled by dt. No-op if followTarget is null or
-    // followSmoothing <= 0. See RigidBody2D::UpdateCamera(), which just
-    // forwards into this -- exists here (not inline) because it needs
-    // RigidBody2D's full definition (transform.position) which this
-    // header only forward-declares.
+    // Eases `selfBody` toward followTarget + focusOffset. Out-of-line because it
+    // needs RigidBody2D's full definition; RigidBody2D::UpdateCamera forwards here.
     void Follow(RigidBody2D& selfBody, float dt);
 
 private:

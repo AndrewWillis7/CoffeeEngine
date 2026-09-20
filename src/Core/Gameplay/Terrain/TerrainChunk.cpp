@@ -10,12 +10,10 @@
 
 namespace {
 
-// Spring integration upper bound on dt. A frame hitch (alt-tab, a stall,
-// a breakpoint) would otherwise hand the blade spring a dt large enough
-// to overshoot past its equilibrium and diverge -- the same class of
-// bug RigidBody2D::Integrate's drag term already documents, and the same
-// fix: cap the step rather than trust the clock. Grass being a frame or
-// two "behind" after a hitch is invisible; grass exploding is not.
+// Upper bound on the spring's dt. A frame hitch would otherwise hand the blades
+// a step large enough to overshoot equilibrium and diverge -- the same class of
+// bug RigidBody2D::Integrate's drag term guards against. Grass a frame behind
+// after a hitch is invisible; grass exploding is not.
 constexpr float kMaxSpringStep = 1.0f / 30.0f;
 
 Color Lerp(const Color& a, const Color& b, float t) {
@@ -29,21 +27,10 @@ float SafeScale(float s) { return s != 0.0f ? s : 1.0f; }
 
 } // namespace
 
-// =====================================================================
-// Local pixel space <-> world space.
-//
-// `u` here is a CONTINUOUS local pixel coordinate measured from the
-// sprite's left/top EDGE, not a pixel index -- pixel index i covers
-// [i, i+1), so the left edge of column i is u = i and its center is
-// u = i + 0.5. Same mapping LightingSystem's WorldToPixel/PixelToWorld
-// use (that pair just bakes the +0.5 in, because it always wants a
-// texel's center); keeping the edge form here is what lets ResolveBody
-// below talk about "the world X where column c starts" without
-// off-by-half errors.
-//
-// Rotation is ignored on purpose -- see the header. Scale is honored so
-// the collision surface stays glued to where the sprite actually draws.
-// =====================================================================
+// `u` is a CONTINUOUS local pixel coordinate from the sprite's left edge, not an
+// index: column i covers [i, i+1). Keeping the edge form (rather than baking in
+// the +0.5 the way LightingSystem does) is what lets ResolveBody talk about
+// "the world X where column c starts" without off-by-half errors.
 
 float TerrainChunk::ColumnToWorldX(float u, const RigidBody2D& terrainBody) const {
     float sx = SafeScale(terrainBody.transform.scale.x);
@@ -54,10 +41,6 @@ float TerrainChunk::WorldToColumn(float worldX, const RigidBody2D& terrainBody) 
     float sx = SafeScale(terrainBody.transform.scale.x);
     return (worldX - terrainBody.transform.position.x) / sx + terrainBody.size.x * 0.5f;
 }
-
-// =====================================================================
-// Generation
-// =====================================================================
 
 void TerrainChunk::Generate(PixelSprite& sprite) {
     m_Width = sprite.GetWidth();
@@ -75,12 +58,9 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
     grassMinHeight = std::clamp(grassMinHeight, 1, kMaxBladeHeight);
     grassMaxHeight = std::clamp(grassMaxHeight, grassMinHeight, kMaxBladeHeight);
 
-    // The grass has to physically fit between the mean surface and the
-    // sprite's top edge, worst case (a column that peaked a full
-    // amplitude high, carrying the tallest possible blade). Clamping here
-    // rather than silently generating clipped grass -- an easy mistake to
-    // make from Lua, and a confusing one to debug from the picture alone,
-    // since the dirt would look completely correct.
+    // Worst case: a column peaked a full amplitude high carrying the tallest
+    // possible blade. Clamped rather than silently clipped, since the dirt would
+    // still look correct and the mistake is easy to make from Lua.
     float minOffset = surfaceAmplitude + static_cast<float>(grassMaxHeight) + 1.0f;
     if (surfaceOffset < minOffset) {
         std::cerr << "Engine Warning: TerrainChunk surfaceOffset (" << surfaceOffset
@@ -97,12 +77,9 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
                                      surfaceOctaves, surfaceLacunarity, surfaceGain, seed);
         float raw = surfaceOffset + n * surfaceAmplitude;
 
-        // Snapped to a whole texel, NOT kept fractional. The dirt can only
-        // start on a pixel boundary anyway, so letting collision believe
-        // in a surface half a texel away from the one you can see is a
-        // guaranteed "the player sinks slightly into the ground" bug.
-        // One number, used by the fill, the grass roots and ResolveBody
-        // alike -- so all three agree exactly.
+        // Snapped to a whole texel: dirt can only start on a pixel boundary, so a
+        // fractional surface would mean the player sinks slightly into visible
+        // ground. One number shared by the fill, the roots and ResolveBody.
         m_SurfaceY[static_cast<size_t>(x)] =
             std::floor(std::clamp(raw, 1.0f, static_cast<float>(m_Height - 1)));
     }
@@ -113,9 +90,8 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
 
         for (int y = 0; y < m_Height; ++y) {
             if (y < top) {
-                // Above the surface: explicitly cleared rather than left
-                // alone, so a second Generate() call with different config
-                // can't leave last generation's dirt floating in the sky.
+                // Cleared explicitly, so a second Generate() can't leave the last
+                // generation's dirt floating in the sky.
                 sprite.SetPixel(x, y, Color::Transparent());
                 continue;
             }
@@ -126,11 +102,9 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
             mottle = Noise::Quantize01(mottle, dirtToneSteps);
             Color c = Lerp(dirtDark, dirtLight, mottle);
 
-            // Depth gradient, in texels below THIS column's own surface
-            // rather than below the sprite's top edge -- otherwise a
-            // column sitting in a dip reads as already half-buried and
-            // the shading follows the sprite's rectangle instead of the
-            // terrain's actual shape.
+            // Measured below THIS column's surface, not the sprite's top edge --
+            // otherwise a column in a dip reads as half-buried and the shading
+            // follows the sprite's rectangle instead of the terrain's shape.
             int depthBelow = y - top;
             int columnDepth = std::max(1, m_Height - top);
             float depth01 = std::clamp(static_cast<float>(depthBelow) / static_cast<float>(columnDepth), 0.0f, 1.0f);
@@ -138,9 +112,8 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
             c = Color(c.r * shade, c.g * shade, c.b * shade, 1.0f);
 
             if (topsoilDepth > 0 && depthBelow < topsoilDepth) {
-                // Blend rather than replace, so the band picks up the same
-                // mottling as the dirt under it and doesn't read as a
-                // painted-on stripe.
+                // Blended, not replaced, so the band picks up the same mottling as
+                // the dirt under it instead of reading as a painted-on stripe.
                 float t = 1.0f - static_cast<float>(depthBelow) / static_cast<float>(topsoilDepth);
                 c = Lerp(c, Color(topsoilColor.r * shade, topsoilColor.g * shade, topsoilColor.b * shade, 1.0f), t * 0.85f);
             }
@@ -171,20 +144,14 @@ void TerrainChunk::Generate(PixelSprite& sprite) {
         if (blade.rootY - blade.height + 1 < 0) blade.height = blade.rootY + 1;
         if (blade.height <= 0) continue;
 
-        // Per-blade phase jitter ON TOP OF the positional wave term in
-        // Update() -- the positional term alone gives a perfectly regular
-        // wave train (every blade at the same x-offset leaning identically
-        // forever), which reads as a flag rather than a field.
+        // Jitter on top of Update()'s positional wave: that term alone gives a
+        // perfectly regular wave train, which reads as a flag, not a field.
         blade.phase = Noise::Hash01(x, 9, seed + 577) * 6.28318f;
         blade.tint = Noise::Hash01(x, 13, seed + 733);
 
         m_Blades.push_back(blade);
     }
 }
-
-// =====================================================================
-// Per-frame grass
-// =====================================================================
 
 void TerrainChunk::Update(PixelSprite& sprite, const RigidBody2D& terrainBody,
                           const std::vector<const RigidBody2D*>& disturbers, float deltaTime) {
@@ -198,11 +165,9 @@ void TerrainChunk::Update(PixelSprite& sprite, const RigidBody2D& terrainBody,
     }
 
     for (GrassBlade& blade : m_Blades) {
-        // Travelling wave: the phase advances with the blade's own column,
-        // so the gust visibly moves along the ground left-to-right instead
-        // of the whole field pulsing at once. Two non-harmonic terms (the
-        // same trick LightingSystem's FlickerFactor uses) keep it from
-        // reading as a metronome.
+        // Travelling wave: phase advances with the blade's column, so the gust
+        // moves along the ground instead of the field pulsing at once. Two
+        // non-harmonic terms keep it from reading as a metronome.
         float wave = std::sin(m_Time * swaySpeed
                               + static_cast<float>(blade.column) * swayPhasePerTexel
                               + blade.phase);
@@ -211,12 +176,10 @@ void TerrainChunk::Update(PixelSprite& sprite, const RigidBody2D& terrainBody,
                                 + blade.phase * 1.3f);
         float target = swayAmplitude * (0.78f * wave + 0.22f * detail);
 
-        // Damped spring toward that target. The disturbers above have
-        // already injected velocity into bendVel this frame, so a shove
-        // and the idle sway share one integrator rather than fighting
-        // over the blade's position -- which is what makes a blade
-        // knocked aside settle back INTO the wind rather than snapping to
-        // upright and then starting to sway again.
+        // The disturbers above already injected into bendVel, so a shove and the
+        // idle sway share one integrator instead of fighting over the blade's
+        // position -- which is what lets a knocked blade settle back INTO the
+        // wind rather than snapping upright and starting over.
         float accel = (target - blade.bend) * bendStiffness - blade.bendVel * bendDamping;
         blade.bendVel += accel * step;
         blade.bend += blade.bendVel * step;
@@ -237,8 +200,11 @@ void TerrainChunk::ApplyDisturber(const RigidBody2D& disturber, const RigidBody2
     Vector2 boxMin = box.Min();
     Vector2 boxMax = box.Max();
 
-    float uMin = WorldToColumn(boxMin.x, terrainBody) - disturbPadding;
-    float uMax = WorldToColumn(boxMax.x, terrainBody) + disturbPadding;
+    // Hoisted: these were being recomputed up to four times per blade.
+    const float uBodyMin = WorldToColumn(boxMin.x, terrainBody);
+    const float uBodyMax = WorldToColumn(boxMax.x, terrainBody);
+    const float uMin = uBodyMin - disturbPadding;
+    const float uMax = uBodyMax + disturbPadding;
     if (uMax < 0.0f || uMin > static_cast<float>(m_Width)) return;
 
     float sy = SafeScale(terrainBody.transform.scale.y);
@@ -251,29 +217,25 @@ void TerrainChunk::ApplyDisturber(const RigidBody2D& disturber, const RigidBody2
         float col = static_cast<float>(blade.column) + 0.5f;
         if (col < uMin || col > uMax) continue;
 
-        // Vertical gate -- a character jumping clean over the grass, or
-        // standing on a ledge above it, shouldn't be parting it. Compared
-        // against the blade's own tip/root, not the chunk's rectangle,
-        // which matters on uneven ground where a blade in a dip sits well
-        // below one on the next rise.
+        // Vertical gate: a character jumping over the grass or standing on a
+        // ledge above it shouldn't part it. Compared against the blade's own
+        // tip/root, which matters on uneven ground.
         float tipWorldY = localTopWorldY + static_cast<float>(blade.rootY - blade.height + 1) * sy;
         float rootWorldY = localTopWorldY + static_cast<float>(blade.rootY + 1) * sy;
         float padY = disturbPadding * sy;
         if (boxMax.y < tipWorldY - padY || boxMin.y > rootWorldY + padY) continue;
 
-        // 1 while the blade is inside the body's own x-span, tapering to 0
-        // across the padding either side -- so grass at the very edge of
-        // a footstep only twitches.
+        // 1 inside the body's x-span, tapering to 0 across the padding either
+        // side, so grass at the edge of a footstep only twitches.
         float overshoot = 0.0f;
-        if (col < WorldToColumn(boxMin.x, terrainBody)) overshoot = WorldToColumn(boxMin.x, terrainBody) - col;
-        else if (col > WorldToColumn(boxMax.x, terrainBody)) overshoot = col - WorldToColumn(boxMax.x, terrainBody);
+        if (col < uBodyMin) overshoot = uBodyMin - col;
+        else if (col > uBodyMax) overshoot = col - uBodyMax;
         float falloff = disturbPadding > 0.0f ? std::clamp(1.0f - overshoot / disturbPadding, 0.0f, 1.0f) : 1.0f;
         if (falloff <= 0.0f) continue;
 
-        // Moving: sweep the grass the way you're going. Standing still:
-        // splay it away from you, so a character at rest sits in a small
-        // parted patch instead of a field that quietly snaps upright the
-        // instant they stop walking.
+        // Moving sweeps the grass along; standing splays it away, so a character
+        // at rest sits in a parted patch instead of a field that snaps upright
+        // the instant they stop walking.
         float dir;
         if (speed > 5.0f) dir = disturber.velocity.x > 0.0f ? 1.0f : -1.0f;
         else {
@@ -295,11 +257,9 @@ void TerrainChunk::EraseBlades(PixelSprite& sprite) {
             int py = blade.rootY - seg;
             if (px < 0 || px >= m_Width || py < 0) continue;
 
-            // The guard that makes erasing exact instead of destructive:
-            // a blade leaning over a NEIGHBORING column can end up above a
-            // pixel that is that column's dirt (or that column's own
-            // grass). Only ever clear a pixel that's air in the column it
-            // actually landed in.
+            // What makes the erase exact rather than destructive: a blade leaning
+            // over a neighbouring column can sit above that column's dirt, so only
+            // ever clear a pixel that is air in the column it landed in.
             if (static_cast<float>(py) >= m_SurfaceY[static_cast<size_t>(px)]) continue;
 
             sprite.SetPixel(px, py, Color::Transparent());
@@ -314,25 +274,19 @@ void TerrainChunk::DrawBlades(PixelSprite& sprite) {
         int prevOffset = 0;
 
         for (int seg = 0; seg < blade.height; ++seg) {
-            // t: 0 at the root, 1 at the tip. The offset is t^2, not t --
-            // a real blade pivots at its base, so the bottom pixel should
-            // barely move while the tip carries almost all of the
-            // displacement. Linear looks like the whole blade sliding
-            // sideways.
+            // t is 0 at the root, 1 at the tip, and the offset is t^2: a real
+            // blade pivots at its base, so the bottom barely moves while the tip
+            // carries the displacement. Linear looks like the blade sliding.
             float t = static_cast<float>(seg + 1) / height;
             float offset = blade.bend * t * t;
 
             int dx = static_cast<int>(std::lround(offset));
 
-            // Never let one segment jump more than a single column past
-            // the one below it. A t^2 curve on a hard-bent blade can round
-            // two adjacent segments to offsets 2 apart, and at one texel
-            // wide that leaves a diagonal GAP -- the blade visually breaks
-            // into a stub and a floating green pixel. Clamping to +/-1 per
-            // segment keeps every blade 8-connected root to tip, which is
-            // what makes it read as one object bending rather than a
-            // column of separate dots. Costs a little bend range on the
-            // tallest blades, which is invisible; the alternative isn't.
+            // A t^2 curve on a hard-bent blade can round adjacent segments to
+            // offsets 2 apart, which at one texel wide leaves a diagonal gap --
+            // the blade breaks into a stub and a floating green pixel. Clamping
+            // to +/-1 per segment keeps it 8-connected root to tip. Costs a
+            // little bend range on the tallest blades, which is invisible.
             dx = std::clamp(dx, prevOffset - 1, prevOffset + 1);
             dx = std::clamp(dx, -kMaxBladeHeight, kMaxBladeHeight);
             prevOffset = dx;
@@ -343,20 +297,15 @@ void TerrainChunk::DrawBlades(PixelSprite& sprite) {
             if (px < 0 || px >= m_Width || py < 0) continue;
             if (static_cast<float>(py) >= m_SurfaceY[static_cast<size_t>(px)]) continue;
 
-            // Tips lighter than roots -- the cheapest way to make 3-5
-            // pixels read as a blade with a direction rather than a green
-            // tally mark. Per-blade tint on top of that keeps the field
-            // from looking like one repeated stamp.
+            // Tips lighter than roots is the cheapest way to make 3-5 pixels read
+            // as a blade with a direction rather than a tally mark; the per-blade
+            // tint keeps the field from looking like one repeated stamp.
             float mix = std::clamp(blade.tint * 0.55f + t * 0.5f, 0.0f, 1.0f);
             sprite.SetPixel(px, py, Lerp(grassDark, grassLight, mix));
         }
         blade.drawn = true;
     }
 }
-
-// =====================================================================
-// Queries and collision
-// =====================================================================
 
 float TerrainChunk::SurfaceWorldY(float worldX, const RigidBody2D& terrainBody) const {
     float sy = SafeScale(terrainBody.transform.scale.y);
@@ -376,13 +325,11 @@ bool TerrainChunk::ResolveBody(RigidBody2D& body, const RigidBody2D& terrainBody
 
     bool resolved = false;
 
-    // At most two passes. The first can shove the body sideways out of a
-    // rise it isn't allowed to climb; the second then lands it on
-    // whatever it's standing over once it's been moved. Bounded rather
-    // than looped-to-convergence on purpose -- one horizontal and one
-    // vertical correction is all a single frame's movement can actually
-    // need, and a convergence loop against a noisy heightfield is exactly
-    // the kind of thing that finds a corner it can oscillate in forever.
+    // At most two passes: the first can shove the body sideways out of a rise it
+    // may not climb, the second lands it on whatever it now stands over. Bounded
+    // rather than looped to convergence on purpose -- one horizontal and one
+    // vertical correction is all a frame's movement needs, and a convergence loop
+    // against a noisy heightfield will find a corner to oscillate in.
     for (int pass = 0; pass < 2; ++pass) {
         AABB box = body.collisionShape
             ? body.collisionShape->GetWorldAABB(body.transform)
@@ -399,11 +346,9 @@ bool TerrainChunk::ResolveBody(RigidBody2D& body, const RigidBody2D& terrainBody
         int c1 = std::clamp(static_cast<int>(std::ceil(uMax)) - 1, 0, m_Width - 1);
         if (c1 < c0) c1 = c0;
 
-        // Highest surface (SMALLEST world Y -- +y is down) anywhere under
-        // the body, not the surface under its center. A box resting on a
-        // bumpy heightfield sits on the tallest thing beneath it; sampling
-        // the center instead lets a bump under one corner get swallowed
-        // and the body visibly clips through it.
+        // Highest surface (smallest world Y, since +y is down) anywhere under the
+        // body, not under its centre: a box rests on the tallest thing beneath
+        // it, and sampling the centre lets a bump under one corner get swallowed.
         float highest = localTopWorldY + m_SurfaceY[static_cast<size_t>(c0)] * sy;
         for (int c = c0 + 1; c <= c1; ++c) {
             highest = std::min(highest, localTopWorldY + m_SurfaceY[static_cast<size_t>(c)] * sy);
@@ -412,12 +357,10 @@ bool TerrainChunk::ResolveBody(RigidBody2D& body, const RigidBody2D& terrainBody
         float penetration = boxMax.y - highest;
         if (penetration <= 0.0f) return resolved; // airborne / clear of the ground
 
-        // Fully below the surface: deliberately NOT resolved. There's no
-        // "correct" way out of solid ground for a heightfield -- pushing
-        // up would teleport a body that fell through a chunk's open end
-        // and wandered back underneath it straight to the top of the
-        // world. Bodies that belong under the terrain (a future cave, a
-        // buried secret) get to stay there.
+        // Fully below the surface is deliberately not resolved: there is no
+        // correct way out of solid ground for a heightfield, and pushing up would
+        // teleport a body that wandered in from a chunk's open end to the top of
+        // the world. Anything that belongs under the terrain stays there.
         if (boxMin.y >= highest) return resolved;
 
         if (penetration <= maxStepHeight) {
@@ -427,11 +370,8 @@ bool TerrainChunk::ResolveBody(RigidBody2D& body, const RigidBody2D& terrainBody
 
         if (pass == 1) return resolved; // already shoved once this call; don't ping-pong
 
-        // Too tall to step onto: treat the offending columns as a wall and
-        // resolve along X instead. Which way out depends on which way the
-        // body was travelling -- and when it isn't travelling at all
-        // (spawned in a cliff, pushed in by something else), take the
-        // shorter way out.
+        // Too tall to step onto: treat those columns as a wall and resolve along
+        // X. Direction follows travel, or the shorter way out when standing still.
         float stepLimitY = boxMax.y - maxStepHeight;
         int firstBlocking = -1;
         int lastBlocking = -1;

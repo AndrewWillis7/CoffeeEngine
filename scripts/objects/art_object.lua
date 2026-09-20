@@ -1,17 +1,11 @@
--- Generic, non-colliding drawable: follows position/rotation/scale, but
--- carries no CollisionShape2D and is never Integrate()'d -- so physics
--- and collision never touch it. For backgrounds, parallax layers,
--- decoration, signage, anything that just needs to sit somewhere and
--- look like something without participating in gameplay.
+-- A non-colliding drawable: follows position, rotation and scale, but carries
+-- no collider and is never integrated, so physics never touches it. For
+-- backgrounds, parallax layers, decoration -- anything that sits there and
+-- looks like something without joining in.
 --
--- Under the hood this is still "just" a RigidBody2D (same as every other
--- drawable in the engine) with nothing attached to it -- there's no
--- dedicated C++ type here, matching PlayerActorConfig/CollisionShape2D
--- being OPT-IN attachments rather than every RigidBody2D always paying
--- for them. This wrapper exists purely for Lua-side clarity/ergonomics:
--- reading `ArtObject.new(...)` at a call site tells you at a glance
--- "this thing doesn't simulate", the same way `StaticBody.new(...)` tells
--- you "this collides but never moves".
+-- Underneath it is still just a RigidBody2D with nothing attached; there is no
+-- dedicated C++ type. The wrapper exists for readability at the call site, the
+-- way StaticBody.new(...) says "collides but never moves".
 
 local Class = require("core.Class")
 
@@ -21,7 +15,7 @@ local ArtObject = Class()
 ---@param y number
 ---@param w number
 ---@param h number
----@param spritePath string|nil PNG path -- if given, replaces the generated solid-color sprite with this texture
+---@param spritePath string|nil PNG path; replaces the generated solid-color sprite
 ---@param r number|nil Fill color if no spritePath given. Defaults to 1
 ---@param g number|nil Fill color if no spritePath given. Defaults to 1
 ---@param b number|nil Fill color if no spritePath given. Defaults to 1

@@ -1,88 +1,50 @@
 #pragma once
 #include "../Math/Color.h"
 
-// Marks a RigidBody2D as a dynamic light source -- attached the same way
-// PlayerActorConfig/CollisionShape2D/Camera2D are (RigidBody2D::
-// lightEmitter, a non-owning pointer; instance owned by ActorRegistry,
-// created via LightEmitterConfig.new() from Lua -- see ScriptBindings.cpp).
-//
-// Consumed entirely by LightingSystem (see LightingSystem.h) once a frame.
-// Nothing here is baked or cached -- move the owning body (or whatever
-// it's shining on) and the very next frame's pass reflects it. The owning
-// body's transform.position IS the light's world-space origin, same "the
-// RigidBody2D is the actor" convention Camera2D already uses.
+// Marks a RigidBody2D as a dynamic light source; owned by ActorRegistry and
+// consumed entirely by LightingSystem once a frame. Nothing is baked, so moving
+// the owning body (whose position IS the light's origin) shows up immediately.
 class LightEmitterConfig {
 public:
     enum class Type { Point, Cone };
 
-    // Point = radiates in every direction (a torch, a campfire, the sun).
-    // Cone = a directional wedge, see coneAngleRad/coneDirectionRad below
-    // (a spotlight, a flashlight).
     Type type = Type::Point;
 
-    // Tint mixed into nearby solid pixels -- see PixelSprite::
-    // AccumulateLightTint. Defaults to a warm torch orange.
+    // Tint mixed into nearby solid pixels. Defaults to a warm torch orange.
     Color color = Color(1.0f, 0.55f, 0.15f, 1.0f);
 
-    // How far the light reaches, in world pixels.
+    // Reach in world pixels.
     float radius = 180.0f;
 
-    // Tint strength multiplier at the light's own position (distance 0).
-    // ~1.0 reads as a normal torch; push toward 2+ for something closer
-    // to "standing next to the sun". 0 effectively turns the light off
+    // Tint strength at distance 0. ~1 reads as a torch; 0 turns the light off
     // without detaching it.
     float brightness = 1.0f;
 
-    // Shapes the radial falloff curve: strength = brightness *
-    // (1 - dist/radius)^falloffExponent. 1.0 = linear falloff, 2.0
-    // (default) = a softer, more natural "brightest right up close"
-    // curve; higher values make a tighter hotspot that drops off faster
-    // near the edge of `radius`.
+    // strength = brightness * (1 - dist/radius)^falloffExponent.
+    // 1 is linear; higher values tighten the hotspot.
     float falloffExponent = 2.0f;
 
-    // Cone-only, both stored in RADIANS (Transform2D.h's rule: "Degrees/
-    // Radians conversion happens at the Lua boundary, not here" -- see
-    // ScriptBindings.cpp's GetConeAngle/SetConeAngle and
-    // GetConeDirection/SetConeDirection, which convert to/from degrees).
-    float coneAngleRad = 60.0f * 0.01745329252f;    // FULL angle -- 60 deg default = 30 either side of coneDirectionRad
-    float coneDirectionRad = 0.0f;                  // 0 = owning body's/world's +X, same convention as Transform2D::rotation
+    // Cone-only, in radians -- the Lua bindings convert to/from degrees.
+    float coneAngleRad = 60.0f * 0.01745329252f;    // FULL angle, so 60 deg = 30 either side
+    float coneDirectionRad = 0.0f;                  // 0 = +X, matching Transform2D::rotation
 
-    // If true (default), coneDirectionRad is added ON TOP OF the owning
-    // body's transform.rotation every frame -- the spotlight turns with
-    // whatever it's mounted on (e.g. a lantern the player carries facing
-    // wherever they're aimed). If false, coneDirectionRad is an absolute
-    // world-space angle, ignoring the body's own rotation entirely -- a
-    // fixed spotlight bolted to a wall.
+    // True: coneDirectionRad is relative to the owning body's rotation, so a
+    // carried lantern turns with its holder. False: absolute world angle, for a
+    // spotlight bolted to a wall.
     bool useOwnerRotation = true;
 
-    // Flicker -- purely a per-frame brightness/color jitter, sampled once
-    // per light per LightingSystem::Update() call (never per-pixel, so a
-    // single frame's lit region never has a hard seam from its own
-    // flicker). Aimed squarely at the "campfire" ask: brightness wobbles
-    // by up to +/-flickerIntensityAmount (a fraction of `brightness`),
-    // and color drifts toward `color + flickerColorShift` on the upswing
-    // -- the default nudges warm orange toward yellow at the brightest
-    // instants, roughly what a real flame does.
+    // Per-frame brightness/color jitter, sampled once per light per Update()
+    // rather than per pixel, so a frame's lit region never seams. Brightness
+    // wobbles by +/-flickerIntensityAmount and color drifts toward
+    // color + flickerColorShift on the upswing, which is roughly what flame does.
     bool flicker = false;
-    float flickerSpeed = 6.0f;              // how fast the jitter cycles, roughly Hz
+    float flickerSpeed = 6.0f;              // roughly Hz
     float flickerIntensityAmount = 0.25f;   // +/- fraction of `brightness`
-    Color flickerColorShift = Color(0.25f, 0.15f, 0.0f, 0.0f); // added toward `color` at the peak of the jitter
+    Color flickerColorShift = Color(0.25f, 0.15f, 0.0f, 0.0f);
 
-    // Stylization knob -- quantizes the radial falloff into this many
-    // discrete concentric bands instead of a smooth continuous gradient.
-    // 0 (default) is "off": falloff is smooth, exactly the old behavior,
-    // nothing changes for a light that doesn't set this. A positive value
-    // rounds the normalized distance-from-light DOWN to the nearest
-    // 1/toneSteps before it's raised to falloffExponent (see
-    // LightingSystem.cpp), so instead of a gradient you get toneSteps
-    // flat-brightness rings -- 3 reads as a punchy, posterized "video
-    // game torch" look (bright core / mid ring / dim ring), higher
-    // numbers approach smooth again as the bands get thinner than a
-    // pixel. Combined with LightingSystem's now-exact (not ray-sampled)
-    // circular radius cutoff, toneSteps=3 on a Point light is the
-    // "stylized 3-tone light in a perfect circle" look -- deliberately a
-    // per-light setting, not an engine-wide one, so a moody torch and a
-    // clean directional spotlight can sit in the same scene with
-    // different looks.
+    // Quantizes radial falloff into this many concentric bands. 0 is off (smooth
+    // gradient). 3 gives the punchy posterized "video game torch" look -- bright
+    // core, mid ring, dim ring. Per-light, not engine-wide, so a moody torch and
+    // a clean spotlight can share a scene.
     int toneSteps = 0;
 };

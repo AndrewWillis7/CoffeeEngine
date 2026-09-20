@@ -202,14 +202,10 @@ void LinuxWindow::SetIcon(const std::string& filepath) {
     stbi_image_free(data);
 }
 
-// Standard EWMH fullscreen toggle -- the same technique GLFW/SDL use.
-// We don't resize/reposition the window ourselves; we ask the window
-// manager to do it via a ClientMessage on the root window, per the EWMH
-// spec (_NET_WM_STATE with the "_NET_WM_STATE_ADD"/"_NET_WM_STATE_REMOVE"
-// convention: 1 to add the state, 0 to remove it). Requires an
-// EWMH-compliant WM to actually do anything -- under a bare Xvfb with no
-// window manager running, this is a harmless no-op (the ClientMessage is
-// sent but nothing is listening to act on it).
+// Standard EWMH fullscreen toggle, the same technique GLFW and SDL use: rather
+// than resize the window ourselves, ask the WM to via a _NET_WM_STATE
+// ClientMessage on the root window (1 adds the state, 0 removes it). Needs an
+// EWMH-compliant WM; under a bare Xvfb it is a harmless no-op.
 void LinuxWindow::SetFullscreen(bool fullscreen) {
     if (fullscreen == m_Fullscreen) return;
 

@@ -7,7 +7,7 @@ namespace {
 
 GLuint s_CurrentProgram = 0;
 
-// Compiles in a single stage and returns its GL handle, or 0 on failure
+// Compiles one stage; returns its GL handle, or 0 on failure.
 GLuint CompileStage(GLenum stage, const std::string& source, const char* stageName) {
     GLuint handle = GL::CreateShader(stage);
     const char* src = source.c_str();
@@ -29,7 +29,7 @@ GLuint CompileStage(GLenum stage, const std::string& source, const char* stageNa
     return handle;
 }
 
-} // End of Namespace
+} // namespace
 
 Shader::Shader(const std::string& vertexSrc, const std::string& fragmentSrc) {
     GLuint vertex = CompileStage(GL_VERTEX_SHADER, vertexSrc, "Vertex");
@@ -49,7 +49,7 @@ Shader::Shader(const std::string& vertexSrc, const std::string& fragmentSrc) {
     GLint linked = GL_FALSE;
     GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
 
-    // Shader objects are refcounted by the program once attached, safe to delete regardless of link outcome
+    // Refcounted by the program once attached, so this is safe either way.
     GL::DeleteShader(vertex);
     GL::DeleteShader(fragment);
 
@@ -100,11 +100,9 @@ int Shader::GetAttribLocation(const std::string& name) {
     return location;
 }
 
-// glUniform* always targets whatever program is currently bound
-// (GL_CURRENT_PROGRAM), so these setters are only meaningful while this
-// shader is active. Lua typically calls these once right after creating a
-// shader (before it's ever been used in a draw), so each setter binds
-// itself first rather than requiring callers to remember to Bind().
+// glUniform* targets whatever program is currently bound, so each setter binds
+// itself first -- Lua typically calls these right after creating a shader, long
+// before it is ever used in a draw.
 
 void Shader::SetFloat(const std::string& name, float value) {
     if (!m_Program) return;

@@ -1,8 +1,6 @@
 local CharacterFactory = require("core.character_factory")
 local StaticBody = require("objects.static_body")
-local Prop = require("objects.prop")
 local Camera = require("objects.camera")
-local ArtObject = require("objects.art_object")
 local Campfire = require("objects.campfire")
 local Spotlight = require("objects.spotlight")
 local Constants = require("core.constants")
@@ -12,60 +10,33 @@ function Init()
     print("Engine Initialized")
     SetClearColor(0.05, 0.05, 0.08)
     Physics.SetGravity(0, 980)
-    SetPixelScale(1);
+    SetPixelScale(1)
 
-    -- Player is the base unit everything else on this floor is laid out
-    -- relative to -- see Constants.PLAYER_WIDTH/HEIGHT's comment. Spawns
-    -- above the floor's open left end and falls onto it. The leg-rig
-    -- look (module sizes/colors, gait tuning, sprint/crouch scales) is
-    -- CharacterFactory.DEFAULT_LEG_CONFIG now -- pass an explicit
-    -- legConfig table here instead if this scene ever wants the player
-    -- to look different from CreateNPC's characters.
-    --
-    -- Torso/clothing is CharacterFactory.DEFAULT_TORSO_CONFIG (a plain
-    -- undershirt, no overshirt) unless overridden -- this scene overrides
-    -- it to also demo the cloak-style overshirt (objects/torso.lua),
-    -- which is off by default since not every character wears one.
-    -- Colors are NOT set here -- CreatePlayer applies
-    -- core/player_colors.lua over whatever shape config is passed in
-    -- (pass `false` as the trailing palette argument to opt out).
+    -- The player is the unit everything else here is laid out against. Spawns
+    -- above the floor's open left end and falls onto it. Leg shape and gait come
+    -- from CharacterFactory.DEFAULT_LEG_CONFIG; colors come from
+    -- core/player_colors.lua, applied over whatever shape config is passed in.
+    -- This scene overrides the torso config only to demo the overshirt.
     player = CharacterFactory.CreatePlayer(118, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT, nil, {
         undershirt = { enabled = true, neckline = 0.28, hem = 1.0, width = 1.0 },
         overshirt  = { enabled = false },
     })
 
-    -- A second, non-controllable character sharing the player's body
-    -- shape -- just wanders left/right on its own (see objects/npc.lua)
-    -- -- but with core/npc_colors.lua's palette instead of the player's,
-    -- to demo that recoloring a character is just a different palette
-    -- table, no shape changes needed. Created AFTER the player:
-    -- Actors.GetPlayer() (C++ side) resolves to the first body with a
-    -- PlayerActorConfig attached, so ordering here matters -- see
-    -- CharacterFactory.CreateNPC's comment.
+    -- Same body shape, different palette -- recoloring a character is just
+    -- another palette table. Created AFTER the player, because Actors.GetPlayer()
+    -- resolves to the first body carrying a PlayerActorConfig.
     npc = CharacterFactory.CreateNPC(140, 90, Constants.PLAYER_WIDTH, Constants.PLAYER_HEIGHT,
         nil, { undershirt = { enabled = true }, overshirt = { enabled = true } },
         require("core.npc_colors"))
 
-    -- The ground. Replaces the old flat 1000x15 StaticBody floor
-    -- entirely: this is a real, noise-generated terrain chunk -- uneven
-    -- dirt with per-pixel grass growing out of it, all of it lit by the
-    -- same LightingSystem pass everything else goes through, and all of
-    -- it collided against as a heightmap rather than a box.
-    --
-    -- Geometry: 320 wide (exactly the native stage width) x 48 tall,
-    -- centered at (160, 156) -- so its top edge is y=132 and its bottom
-    -- sits flush on the bottom of the 180-tall stage. surfaceOffset 16
-    -- puts the MEAN surface at y=148, and the amplitude below swings it
-    -- roughly y=142..154 -- around a third of a player-height of relief,
-    -- which is enough to read as real ground rather than a decorated
-    -- line, while still being walkable everywhere (maxStepHeight
-    -- defaults to 6). That leaves the grass (up to 5 texels tall)
-    -- comfortably inside the sprite's own top edge, which is the one
-    -- constraint terrain sizing has -- see Terrain.new's comment.
-    --
-    -- Change `seed` and you get a completely different, equally valid
-    -- piece of ground; change nothing and it regenerates identically
-    -- across hot-reloads.
+    -- The ground: a noise-generated chunk of uneven dirt with per-pixel grass,
+    -- lit by the same pass as everything else and collided as a heightmap.
+    -- 320 wide (the native stage width) x 48 tall, centred so its bottom sits
+    -- flush with the stage. The surface swings roughly y=142..154, about a third
+    -- of a player-height of relief -- enough to read as ground while staying
+    -- walkable everywhere (maxStepHeight defaults to 6). Change `seed` for
+    -- completely different but equally valid ground; leave it and the chunk
+    -- regenerates identically across hot-reloads.
     terrain = Terrain.new(160, 156, 320, 48, {
         seed = 76,
         surfaceAmplitude = 5,
@@ -75,90 +46,54 @@ function Init()
         grassMaxHeight = 7
     })
 
-        -- Its Y is no longer a hand-computed constant: the ground is uneven
-    -- now, so "sitting on the floor" means asking the terrain where its
-    -- surface actually is at this X and centering on that. This is the
-    -- normal way to place anything on terrain -- see Terrain:SurfaceYAt.
+    -- Placing anything on uneven ground means asking the terrain where its
+    -- surface actually is at that X, never a hand-computed constant.
     local wallX, wallHeight = 198, 48
     wall = StaticBody.new(wallX, terrain:SurfaceYAt(wallX) - wallHeight / 2, 16, wallHeight, 0.6, 0.2, 0.2)
 
-    -- Casts a hard shadow -- light_blocking bodies stop a light ray dead
-    -- at their first solid pixel instead of letting it pass through (see
-    -- LightingSystem.h). Everything else (floor, crate, the player) is
-    -- lit-but-not-blocking by default: light passes through them but
-    -- still tints whatever solid pixels it touches along the way.
+    -- Casts a hard shadow: a blocking body stops a light ray at its first solid
+    -- pixel. Everything else is lit but not blocking -- light passes through and
+    -- still tints the solid pixels it touches on the way.
     wall.body:SetLightBlocking(true)
 
     local campfireX, campfireSize = 178, 16
     campfire = Campfire.new(campfireX, terrain:SurfaceYAt(campfireX) - campfireSize / 2, campfireSize)
 
-    -- A second, cooler light source up in the top-right corner of the
-    -- 320x180 stage, aimed down-left across the whole floor -- see
-    -- Spotlight.lua. Its radius (300) is deliberately much bigger than
-    -- the campfire's (60): the two lights are meant to OVERLAP everywhere
-    -- the player can stand, not take turns. Walk left, away from the
-    -- fire, and the mix (see PixelSprite::AccumulateLightTint) shifts
-    -- from campfire-orange toward this light's violet as the campfire's
-    -- short-range contribution fades out while this one's long, gentle
-    -- falloff barely changes -- stand between them and both colors mix
-    -- into the same pixels at once, rather than one replacing the other.
-    -- 140 degrees points from this corner down toward the floor/campfire
-    -- area (0 = +X/right, 90 = +Y/down -- see Spotlight.lua's comment).
+    -- Cooler, much wider light (radius 300 against the campfire's 60) so the two
+    -- OVERLAP everywhere the player can stand rather than taking turns. Walking
+    -- away from the fire shifts the mix from orange toward violet as the
+    -- campfire's short-range contribution drops and this one's barely changes.
+    -- 140 degrees aims from the corner down across the floor (0 = right, 90 = down).
     spotlight = Spotlight.new(300, 10, 140)
     spotlight2 = Spotlight.new(-300, 10, 140)
     spotlight2.light:SetColor(1.0, 0.0, 0.0, 1.0)
 
-    -- Background decoration -- no collision, never simulated, just sits
-    -- there. crate.png is natively 40x40; SetScale(1.5) draws it at
-    -- 60x60 without touching its logical size (GetSize() still reports
-    -- 40x40) -- repositioned to sit in-frame on the new 320x180 stage
-    -- (it used to be at x=400, entirely off the left edge of this
-    -- resolution).
-    --background = ArtObject.new(160, 55, 40, 40, "Art/crate.png")
-    --background:SetScale(1.5)
-
     solids = {terrain, wall}
 
-    -- Native pixel-art resolution + aspect, see core.constants -- the
-    -- "resolution control" knob; every world pixel draws
-    -- (real window width / RESOLUTION_WIDTH) real screen pixels wide,
-    -- letterboxed/pillarboxed to stay exactly 16:9 regardless of the
-    -- real window's own aspect.
-    --
-    -- Press F11 to toggle real OS fullscreen -- stays correctly
-    -- letterboxed at any window size, never stretches.
+    -- Native pixel-art resolution and aspect (see core.constants): every world
+    -- pixel draws (window width / RESOLUTION_WIDTH) screen pixels wide,
+    -- letterboxed to stay 16:9 whatever the window's own aspect is. F11 toggles
+    -- OS fullscreen and stays correctly letterboxed, never stretched.
     local playerX, playerY = player.body:GetPosition()
     camera = Camera.new(playerX, playerY, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
     camera:Follow(player.body, 4.0)
     camera.camera:SetTargetAspect(Constants.ASPECT_WIDTH, Constants.ASPECT_HEIGHT)
 
-    -- Frame the camera a bit ABOVE the player instead of dead-centered
-    -- on them -- more headroom to see what's coming (platforms, enemies,
-    -- the crate above), less wasted space below. Negative Y is up (see
-    -- Vector2.h's "+y is down" convention). ~11% of the native vertical
-    -- resolution reads as a gentle, not-too-aggressive offset -- was -40
-    -- against the old 360-tall viewport, rescaled to -20 against the
-    -- new 180-tall one to keep that same proportion.
+    -- Framed above the player for headroom to see what's coming. Negative Y is
+    -- up; ~11% of the native vertical resolution is a gentle offset.
     camera.camera:SetFocusOffset(0, -20)
 
-    -- The border (drawn behind everything, filling whatever the fit
-    -- above doesn't cover) defaults to a black night sky with sparse
-    -- stars up top and dark grey smoke clouds drifting near the bottom
-    -- -- nothing to do if that's all you want. To swap it for something
-    -- else, write a .frag file (paired with the engine's shared vertex
-    -- shader -- see scripts/shaders/*.frag for the uniform/varying
-    -- interface each one has to work with) and load it by name:
+    -- The border filling whatever the fit doesn't cover defaults to a night sky
+    -- with stars and drifting smoke. To replace it, write a .frag against the
+    -- shared vertex stage and load it by name:
     --
     --   Actors.LoadShaderFromFile("Border", "scripts/shaders/border_plain.frag")
     --   Actors.GetNamedShader("Border"):SetVec3("u_PlainColor", 0.6, 0.05, 0.05)
     --
-    -- For a textured border (tiled pixel art, a photo, whatever), attach
-    -- a sprite too -- SetBorderSprite works alongside any shader that
-    -- declares `uniform sampler2D u_Texture`:
+    -- Attach a sprite too for a textured border, with any shader declaring
+    -- `uniform sampler2D u_Texture`:
     --
     --   Actors.SetBorderSprite(Sprite.Load("Art/crate.png"))
-    --   Actors.LoadShaderFromFile("Border", "scripts/shaders/border_tiled_sprite.frag")
-    --   Actors.GetNamedShader("Border"):SetFloat("u_TileSize", 64.0)
 end
 
 function Update(deltaTime)
@@ -166,35 +101,25 @@ function Update(deltaTime)
         eWindow:SetFullscreen(not eWindow:IsFullscreen())
     end
 
-    -- Constants.RESOLUTION_WIDTH/HEIGHT doubles as the play area's
-    -- bounds here (texels, not real window pixels -- see
-    -- Character:Update's comment) because this level fits entirely
-    -- within one camera frame. A level that scrolls beyond what the
-    -- camera shows at once would need its own, separate level-bounds
-    -- concept instead of reusing the camera's native resolution for this.
+    -- The native resolution doubles as the play area's bounds (in texels) because
+    -- this level fits in one camera frame. A scrolling level would need its own
+    -- level-bounds concept instead of reusing the camera's resolution.
     player:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
     npc:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
 
-    -- Camera reacts AFTER gameplay has moved this frame, so it's chasing
-    -- the freshest player position, then gets pushed to the renderer once
-    -- (not once per DrawBody() call -- see SyncCamera()'s comment).
+    -- Camera reacts AFTER gameplay has moved, so it chases this frame's position,
+    -- then is pushed to the renderer once rather than once per DrawBody().
     camera:Update(deltaTime)
     SyncCamera()
 
+    -- Terrain before lighting: the grass pixels it writes must be lit this frame
+    -- rather than next. Lighting is recomputed fresh every frame, never baked.
     UpdateTerrain(deltaTime)
-
-    -- Recomputes every light's per-pixel tint fresh THIS frame -- never
-    -- baked, so a light that moved (or the player walking past one)
-    -- shows up immediately. Runs once a frame, same convention as
-    -- SyncCamera() -- see UpdateLighting()'s comment in ScriptBindings.cpp.
     UpdateLighting(deltaTime)
 
-    -- Environment first, player on top of it -- with the crate/floor/
-    -- wall now sized close enough to the player to actually sit flush
-    -- against it (see their spawn positions above), drawing the player
-    -- BEFORE them meant an adjacent crate could paint right over it.
-    -- Campfire drawn last so its glow reads as sitting in front of
-    -- whoever's standing next to it.
+    -- Environment first, characters on top: scenery sized close enough to sit
+    -- flush against the player would otherwise paint over it. Campfire last, so
+    -- its glow reads as being in front of whoever stands next to it.
     terrain:Draw()
     wall:Draw()
     player:Draw()

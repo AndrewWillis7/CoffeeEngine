@@ -18,8 +18,8 @@ public:
     int GetWidth() const { return m_Width; }
     int GetHeight() const { return m_Height; }
 
-    // Re-uploads a sub-rectangle without touching the rest of the texture.
-    // Pixels must point at the (x, y) texel within a buffer that is GetWidth() texels wide
+    // Re-uploads a sub-rect. `pixels` must point at the (x, y) texel of a buffer
+    // GetWidth() texels wide, not a tightly packed w*h copy.
     void UpdateRegion(int x, int y, int w, int h, const unsigned char* pixels);
 
 private:

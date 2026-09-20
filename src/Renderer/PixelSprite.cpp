@@ -7,11 +7,9 @@
 
 PixelSprite::PixelSprite(const std::string& filepath, Texture::Filter filter) {
     int channels = 0;
-    // Same not-flipped convention as Texture::Texture(filepath) -- see the
-    // comment there. Decoded here (rather than reusing that constructor)
-    // because we need to keep our own copy of the pixels around for
-    // SetPixel/PunchCircle/IsSolid; Texture's file constructor frees its
-    // decoded buffer right after the initial upload.
+    // Same not-flipped convention as Texture's own file constructor, but decoded
+    // here because we keep the pixels around for SetPixel/PunchCircle/IsSolid;
+    // Texture frees its decoded buffer right after the initial upload.
     unsigned char* data = stbi_load(filepath.c_str(), &m_Width, &m_Height, &channels, 4);
     if (!data) {
         std::cerr << "Engine Warning: PixelSprite failed to load '" << filepath << "'\n";
@@ -62,9 +60,8 @@ void PixelSprite::SetPixel(int x, int y, const Color& color) {
     unsigned char a = static_cast<unsigned char>(std::clamp(color.a, 0.0f, 1.0f) * 255.0f);
 
     m_Pixels[i + 0] = r; m_Pixels[i + 1] = g; m_Pixels[i + 2] = b; m_Pixels[i + 3] = a;
-    // Mirror straight into the lit buffer too -- an authored edit must be
-    // visible immediately even on a pixel no light happens to be touching
-    // this frame (the common case: most of a sprite, most of the time).
+    // Mirror into the lit buffer too: an authored edit must show immediately,
+    // even on a pixel no light happens to touch this frame.
     m_LitPixels[i + 0] = r; m_LitPixels[i + 1] = g; m_LitPixels[i + 2] = b; m_LitPixels[i + 3] = a;
     MarkDirty(x, y, 1, 1);
 }
@@ -76,19 +73,13 @@ Color PixelSprite::GetPixel(int x, int y) const {
     return Color(m_Pixels[i + 0] / 255.0f, m_Pixels[i + 1] / 255.0f, m_Pixels[i + 2] / 255.0f, m_Pixels[i + 3] / 255.0f);
 }
 
-bool PixelSprite::IsSolid(int x, int y) const {
-    if (x < 0 || y < 0 || x >= m_Width || y >= m_Height) return false;
-    return m_Pixels[(static_cast<size_t>(y) * m_Width + x) * 4 + 3] > 0;
-}
-
 void PixelSprite::Clear() {
     if (m_Pixels.empty()) return;
 
     std::fill(m_Pixels.begin(), m_Pixels.end(), static_cast<unsigned char>(0));
     std::fill(m_LitPixels.begin(), m_LitPixels.end(), static_cast<unsigned char>(0));
-    // Lighting accumulation goes with it: a texel that was solid last
-    // frame and is empty now must not hand its leftover weight to whatever
-    // gets drawn there next frame (see AccumulateLightTint's mix math).
+    // Accumulation goes with it: a texel that was solid last frame and is empty
+    // now must not hand its leftover weight to whatever is drawn there next.
     std::fill(m_LightAccumColor.begin(), m_LightAccumColor.end(), 0.0f);
     std::fill(m_LightAccumWeight.begin(), m_LightAccumWeight.end(), 0.0f);
 
@@ -128,17 +119,16 @@ void PixelSprite::DrawLimb(int x0, int y0, int x1, int y1, int thickness, const 
     int dy = y1 - y0;
     int steps = std::max(std::abs(dx), std::abs(dy));
 
-    // Degenerate (both endpoints in the same texel) -- still draw the one
-    // run, so a zero-length module doesn't silently vanish.
+    // Degenerate: still draw one run so a zero-length module doesn't vanish.
     if (steps == 0) {
         FillRect(x0 - thickness / 2, y0, thickness, 1, color);
         return;
     }
 
-    // Integer-rational interpolation rather than a float accumulator: the
-    // minor coordinate is recomputed from `i` every step, so it can't
-    // drift, and the same endpoints always produce bit-identical runs.
-    // That exactness is what stops a held pose from shimmering.
+    // Integer-rational interpolation rather than a float accumulator: the minor
+    // coordinate is recomputed from `i` each step so it cannot drift, and the
+    // same endpoints always produce bit-identical runs. That is what stops a
+    // held pose from shimmering.
     if (std::abs(dy) >= std::abs(dx)) {
         int stepY = (dy > 0) ? 1 : -1;
         for (int i = 0; i <= steps; ++i) {
@@ -167,9 +157,8 @@ void PixelSprite::DrawTaperedLimb(int x0, int y0, int x1, int y1,
     const int dy = y1 - y0;
     const int steps = std::max(std::abs(dx), std::abs(dy));
 
-    // Thickness at parameter u along the bone. The hump is a half-sine
-    // remapped so its peak lands on bulgeAt -- smooth on both sides, so
-    // the muscle belly reads as a curve rather than a kink.
+    // Thickness at u along the bone. The hump is a half-sine remapped so its peak
+    // lands on bulgeAt, keeping the muscle belly a curve rather than a kink.
     auto widthAt = [&](float u) -> int {
         float w = static_cast<float>(t0) + (static_cast<float>(t1) - static_cast<float>(t0)) * u;
         if (bulge != 0.0f) {
@@ -188,9 +177,7 @@ void PixelSprite::DrawTaperedLimb(int x0, int y0, int x1, int y1,
         return;
     }
 
-    // Integer-rational interpolation on the minor axis, same as DrawLimb:
-    // recomputed from `i` every step so it cannot drift, and the same
-    // endpoints always produce bit-identical runs.
+    // Same drift-free integer-rational minor axis as DrawLimb.
     if (std::abs(dy) >= std::abs(dx)) {
         const int stepY = (dy > 0) ? 1 : -1;
         for (int i = 0; i <= steps; ++i) {
@@ -246,11 +233,8 @@ void PixelSprite::ResetLightingRect(int minX, int minY, int maxX, int maxY) {
         size_t rowStart = (static_cast<size_t>(y) * m_Width + minX) * 4;
         std::memcpy(m_LitPixels.data() + rowStart, m_Pixels.data() + rowStart, rowBytes);
 
-        // Zero this rect's accumulation too -- not just the visible lit
-        // color -- so next frame's mix starts from a clean (0 weight)
-        // slate instead of quietly carrying over last frame's light
-        // contributions and biasing the very first AccumulateLightTint
-        // call of the new frame.
+        // Zero the accumulation as well as the visible color, or next frame's
+        // first AccumulateLightTint call inherits last frame's weight.
         size_t accumRowStart = (static_cast<size_t>(y) * m_Width + minX) * 3;
         size_t weightRowStart = static_cast<size_t>(y) * m_Width + minX;
         std::fill_n(m_LightAccumColor.data() + accumRowStart, accumRowFloats, 0.0f);
@@ -274,13 +258,9 @@ void PixelSprite::AccumulateLightTint(int x, int y, const Color& tint, float str
     m_LightAccumWeight[weightI] += strength;
     float totalWeight = m_LightAccumWeight[weightI];
 
-    // Resolve: mix the base color toward the accumulated lights' own
-    // weighted-average color, by however much light has actually reached
-    // this pixel. `mixAmount` saturates at 1.0 (fully replaced by the
-    // light color, never blown out past it) even if several lights (or
-    // several rays off the same light) keep adding weight beyond that --
-    // see AccumulateLightTint's header comment for why this reads as a
-    // genuine mix rather than an additive wash.
+    // Mix the base toward the lights' weighted-average color by however much
+    // light actually reached here. mixAmount saturates at 1, so extra weight
+    // never blows the pixel out past the light's own color.
     float baseR = m_Pixels[i + 0] / 255.0f;
     float baseG = m_Pixels[i + 1] / 255.0f;
     float baseB = m_Pixels[i + 2] / 255.0f;

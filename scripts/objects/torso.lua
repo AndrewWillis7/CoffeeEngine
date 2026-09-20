@@ -1,37 +1,26 @@
--- Scalable, humanoid-tapered torso + clothing. Owns the actual torso
--- RigidBody2D/sprite (what character.lua used to build inline), plus two
--- optional cloth layers on top of it:
+-- Scalable, humanoid-tapered torso and clothing. Owns the torso's own
+-- RigidBody2D and sprite, plus two optional cloth layers:
 --
---   BASE SILHOUETTE -- not a rectangle: tapers linearly from
---   `shoulderWidth` texels at the top row to `waistWidth` at the bottom
---   row (both centered), so the torso itself reads as a body rather than
---   a box. Baked into the sprite at construction, same as the clothing
---   below -- it never changes shape at runtime.
+--   BASE SILHOUETTE -- not a rectangle. Tapers linearly from shoulderWidth at
+--   the top row to waistWidth at the bottom, both centred, so the torso reads
+--   as a body rather than a box. Baked in at construction; never changes shape.
 --
---   UNDERSHIRT -- baked directly into the torso's own sprite, because it
---   never extends past the torso block. Hugs the tapered silhouette
---   above (its own `width` is a fraction of THAT row's taper width, not
---   the bounding box), and is tunable from a full crew-neck shirt down
---   to a narrow sports-bra-like cut via `neckline` (how deep the collar
---   dips) and `hem` (how far up from the hips it's cropped).
+--   UNDERSHIRT -- baked into the torso's own sprite, since it never extends
+--   past the torso block. Hugs the taper above (its `width` is a fraction of
+--   THAT row's width, not the bounding box) and tunes from a crew neck down to
+--   a narrow cut via `neckline` and `hem`.
 --
---   OVERSHIRT ("cloak") -- ONE solid, opaque span per row (never two
---   disconnected strips with daylight between them), attached at the
---   shoulders and drifting toward the BACK leg's side as it falls, so it
---   reads as real cloth draped over one side of the body and covering
---   the trailing leg -- the leading leg is always drawn last (see
---   Character:Draw) and so stays visible in front of it regardless of
---   overlap. Shaded two-tone (a darker trailing edge, a lit leading one)
---   for a simple sense of volume. Can drop past the hips into leg space
---   (`length` in texels below the hip line), so unlike the undershirt it
---   can't just live on the torso sprite -- it gets its own canvas, sized
---   and positioned the same way LegRig sizes its leg canvases.
+--   OVERSHIRT ("cloak") -- one solid span per row, never two disconnected
+--   strips with daylight between them. Attaches at the shoulders and drifts
+--   toward the BACK leg's side as it falls, so it reads as cloth draped over
+--   one side and covering the trailing leg; the leading leg is drawn last and
+--   stays visible regardless of overlap. Two-tone shaded for volume. It can
+--   drop past the hips into leg space, so unlike the undershirt it needs its
+--   own canvas, sized the way LegRig sizes its leg canvases.
 --
--- Owned by Character (objects/character.lua), which builds one instead
--- of the old inline RigidBody2D+Sprite pair, calls UpdateCloth every
--- frame (after legs, so it can read the leg rig's sway), and sandwiches
--- DrawOvershirt("back")/("front") around the torso draw the same way it
--- already sandwiches DrawLegs("back")/("front") around it.
+-- Owned by Character, which calls UpdateCloth every frame after the legs (so it
+-- can read their sway) and sandwiches DrawOvershirt("back")/("front") around
+-- the torso draw, exactly as it does with DrawLegs.
 
 local Class = require("core.Class")
 
@@ -49,113 +38,77 @@ local function pick(a, b) if a == nil then return b end return a end
 Torso.Defaults = {
     color = {1.0, 1.0, 1.0, 1.0},
 
-    -- Texels wide at the top row (shoulders) and bottom row (waist/hip
-    -- line) -- linearly interpolated row by row, centered. This is what
-    -- makes the silhouette read as humanoid instead of a rectangle; every
-    -- clothing layer below hugs whatever this taper is at its own row.
+    -- Texels wide at the top (shoulders) and bottom (waist) rows, interpolated
+    -- row by row and centred. Every clothing layer hugs this taper at its row.
     shoulderWidth = 4,
     waistWidth    = 2,
 
     undershirt = {
         enabled = true,
         color   = {0.75, 0.20, 0.25, 1.0},
-        -- Fraction of torso height the neckline dips down from the top
-        -- (the shoulder line). 0 = crew neck covering up to the
-        -- shoulders, toward ~0.5 = a deep scoop baring the upper chest.
+        -- Fraction of torso height the neckline dips from the shoulder line.
+        -- 0 is a crew neck, ~0.5 a deep scoop.
         neckline = 0.28,
-        -- Rows the neckline cut is spread across -- 0 is a hard
-        -- horizontal cutoff, more rounds it into a shallow scoop/V.
+        -- Rows the cut spreads across: 0 is a hard edge, more rounds it.
         necklineTaper = 2,
-        -- Fraction of the REMAINING height (below the neckline) the hem
-        -- covers, anchored at the hips. 1.0 = a full shirt terminating
-        -- exactly at the hips (the undershirt can never go lower than
-        -- that -- see the module comment); smaller crops it upward
-        -- toward a sports-bra/crop silhouette.
+        -- Fraction of the REMAINING height below the neckline the hem covers,
+        -- anchored at the hips. 1.0 ends exactly at the hips, which is as low
+        -- as the undershirt can go; smaller crops it upward.
         hem = 1.0,
-        -- Fraction of the BODY'S TAPER WIDTH at each row -- 1.0 hugs the
-        -- silhouette exactly, smaller narrows toward a bra/tank strap
-        -- width.
+        -- Fraction of the body's taper width per row: 1.0 hugs it exactly.
         width = 1.0,
     },
 
     overshirt = {
         enabled = false,
-        -- Brown by default -- reads as cloth/leather against the torso's
-        -- own colors and stays visually distinct from either.
+        -- Brown reads as cloth against the torso's own colors.
         color = {0.36, 0.22, 0.12, 1.0},
-        -- Fraction of torso height the cloak's attach line starts at --
-        -- 0 drapes it from the very top of the shoulders.
+        -- Fraction of torso height the attach line starts at; 0 is the shoulders.
         neckline = 0.0,
-        -- Half-width of EACH PANEL at the shoulder attachment, texels --
-        -- two panels (left/right of `openFront`'s gap, like an
-        -- unbuttoned trench coat's flaps). Matches Torso.Defaults'
-        -- shoulderWidth/2 (4/2 = 2) so the top edge sits FLUSH against
-        -- the torso's own shoulder edge instead of already being wider
-        -- than the body it's supposedly attached to -- retune this
-        -- alongside shoulderWidth if that changes.
+        -- Half-width of EACH panel at the shoulder, in texels -- two panels
+        -- either side of openFront's gap, like an unbuttoned coat's flaps.
+        -- Matches shoulderWidth/2 so the top edge sits FLUSH against the
+        -- torso's shoulder rather than already overhanging it. Retune together.
         width = 2,
-        -- Fraction of each panel's own half-width that peels away as a
-        -- gap down the middle, growing from 0 at `gapStart` to this
-        -- fraction by the hem -- what shows the undershirt through
-        -- rather than a sealed, buttoned-up front. Not scaled by motion:
-        -- an unbuttoned coat is open at rest too.
+        -- Fraction of each panel's half-width that peels away as a centre gap,
+        -- growing from 0 at gapStart to this by the hem -- what shows the
+        -- undershirt through. Not motion-scaled: an open coat is open at rest.
         openFront = 0.5,
-        -- Fraction of the coat's length (from the collar) that stays
-        -- fully CLOSED/connected -- like a real trench coat's lapels,
-        -- which overlap right at the neckline before the flaps actually
-        -- separate. Below this point the gap ramps in linearly to
-        -- `openFront`'s full width by the hem; above it there is no gap
-        -- at all, the two panels' edges meet. Kept small and measured
-        -- against the WHOLE coat span (torso + below-hip length
-        -- combined, see RasterizeOvershirt) -- with the torso alone
-        -- being ~60% of that span, anything much bigger than this
-        -- swallows the entire torso and leaves no undershirt visible.
+        -- Fraction of the coat's length from the collar that stays CLOSED, the
+        -- way real lapels overlap before the flaps separate. Below it the gap
+        -- ramps linearly to openFront by the hem; above it the panels meet.
+        -- Measured against the WHOLE span, torso plus below-hip length -- and
+        -- since the torso alone is ~60% of that, much more swallows it entirely.
         gapStart = 0.12,
-        -- Texels the half-width grows by the hem, on top of `width` --
-        -- a gentle, SMOOTH taper across the whole drop (not gated to
-        -- motion or to the hip line the way backDrift is below) -- a
-        -- coat that suddenly stops widening partway down reads as
-        -- broken, not draped.
+        -- Texels the half-width grows by the hem, on top of `width`. A smooth
+        -- taper across the whole drop, ungated: a coat that stops widening
+        -- partway down reads as broken rather than draped.
         flare = 1.5,
-        -- Texels the WHOLE span drifts toward the back leg's side BY THE
-        -- HIP LINE, held there for the rest of the drop (the -facing
-        -- direction -- see LegRig's own hipX*facing convention, and
-        -- RasterizeOvershirt's hipT) -- what lets a shoulder-centered
-        -- garment end up covering the trailing leg through its whole
-        -- visible length, while the leading leg, always drawn last (see
-        -- Character:Draw), stays visible in front of it regardless of
-        -- overlap. Kept modest -- width+flare already brackets both legs
-        -- at the hip on their own (see hipT's comment); this only needs
-        -- to tip the balance toward one side, not fling the coat off the
-        -- body. Scaled by motion (see restSwing).
+        -- Texels the whole span drifts toward the back leg's side BY THE HIP
+        -- LINE, held there for the rest of the drop. This is what lets a
+        -- shoulder-centred garment cover the trailing leg along its whole
+        -- length. Kept modest: width+flare already bracket both legs at the
+        -- hip, so this only tips the balance rather than flinging the coat off
+        -- the body. Motion-scaled -- see restSwing.
         backDrift = 1.5,
-        -- Floor on backDrift's motion scale (see UpdateCloth) -- 1.0 =
-        -- always fully drifted regardless of motion, 0.0 = dead flat and
-        -- centered at a full stop. There's no wind model here, so "at
-        -- rest" means only gravity: thinner and flatter, not zero (real
-        -- cloth still hangs with some shape).
+        -- Floor on backDrift's motion scale: 1.0 always fully drifted, 0.0 dead
+        -- flat at a stop. With no wind model, "at rest" means gravity alone --
+        -- thinner and flatter, but not zero, since real cloth still has shape.
         restSwing = 0.25,
-        -- Each panel is uniformly tinted -- the one on the trailing
-        -- (away-from-facing) side at `shadeMul`, the other at full color
-        -- -- simple one-sided volume cue, same idea as LegRig's far-leg
-        -- shade.
+        -- The trailing panel tints to shadeMul, the leading one stays full --
+        -- a one-sided volume cue, the same idea as LegRig's far-leg shade.
         shadeMul = 0.6,
-        -- Texels the coat hangs BELOW the hip line. Tuned against
-        -- CharacterFactory.DEFAULT_LEG_CONFIG's legging+knee height
-        -- (hip-to-knee ~= 10 texels there) to land a little ABOVE the
-        -- knee -- retune this if that leg config's proportions change.
+        -- Texels the coat hangs BELOW the hip line, tuned against the default
+        -- leg config's ~10-texel hip-to-knee to land just above the knee.
         length = 8,
-        -- How much of the owner's BODY LEAN carries into the cloak -- 0
-        -- is rigid, 1 is full transfer. No wind and no fabricated idle
-        -- flutter -- this is the only source of sway, so it stays
-        -- bounded by however far the body itself actually leans (see
-        -- LegRig.Defaults.weight.lean, normally +/-1 texel). Applied
-        -- per-row, scaled by distance from the (anchored) collar, so the
-        -- hem swings while the shoulders stay put.
+        -- How much of the owner's BODY LEAN carries into the cloak: 0 rigid,
+        -- 1 full. With no wind and no fabricated flutter this is the only
+        -- source of sway, so it stays bounded by how far the body actually
+        -- leans. Applied per row, scaled by distance from the anchored collar,
+        -- so the hem swings while the shoulders stay put.
         flow    = 0.4,
         flowLag = 10,   -- IK.Approach rate the sway eases toward its target at
-        -- "front", "back", or "both" -- which side of the legs the coat
-        -- draws on, same convention as LegRig's hip.layer.
+        -- Which side of the legs the coat draws on, as LegRig's hip.layer.
         layer = "front",
     },
 }
@@ -164,12 +117,10 @@ Torso.Defaults = {
 -- Construction
 -- ---------------------------------------------------------------------
 
--- w, torsoHeight: the torso block's own bounding size (texels) -- the
--- SILHOUETTE drawn inside it tapers per shoulderWidth/waistWidth, so it
--- does not have to (and by design should not) fill that box. standHeight:
--- the leg rig's GetStandHeight(), currently unused but kept for parity
--- with the canvas-sizing pattern LegRig itself uses. config == false
--- disables both cloth layers but still builds the plain tapered body.
+-- w, torsoHeight are the block's bounding size; the silhouette inside tapers
+-- and by design does not fill it. standHeight is unused, kept for parity with
+-- LegRig's canvas sizing. config == false disables both cloth layers but still
+-- builds the plain tapered body.
 function Torso.new(x, y, w, torsoHeight, standHeight, config)
     local self = setmetatable({}, Torso)
     self:Init(x, y, w, torsoHeight, standHeight, config)
@@ -228,10 +179,8 @@ function Torso:Init(x, y, w, torsoHeight, standHeight, config)
     self.swingScale = self.overshirtCfg.restSwing
 end
 
--- Half-width of the tapered silhouette at a given row (0 = top/shoulder
--- row, h-1 = bottom/waist row), in texels. Shared by the base silhouette
--- fill and the undershirt, so clothing always hugs the body's own taper
--- instead of a fixed rectangle.
+-- Half-width of the silhouette at a row (0 = shoulders, h-1 = waist). Shared
+-- by the base fill and the undershirt, so clothing hugs the body's own taper.
 function Torso:TaperHalfWidthAt(row)
     local h = self.h
     local t = (h > 1) and clamp(row / (h - 1), 0.0, 1.0) or 0.0
@@ -279,10 +228,8 @@ function Torso:RasterizeUndershirt()
     local hemRow = h - floor((h - neckRow) * (1.0 - u.hem) + 0.5)
     if hemRow <= neckRow then return end
 
-    -- Neckline taper: the top `necklineTaper` rows narrow toward the
-    -- collar from the body's own taper width at that row, rather than
-    -- a fixed width -- the shirt hugs the silhouette even while cropping
-    -- the collar.
+    -- The top necklineTaper rows narrow toward the collar from the body's own
+    -- width at that row, so the shirt hugs the silhouette while cropping.
     local taper = min(u.necklineTaper, hemRow - neckRow)
     for row = neckRow, hemRow - 1 do
         local bodyHalfW = self:TaperHalfWidthAt(row) * u.width
@@ -325,10 +272,8 @@ function Torso:BuildOvershirtCanvas()
     self.coatHipRow = self.coatTopRow + (self.h - neckRow)
     self.coatBottomRow = self.coatHipRow + o.length
 
-    -- offY anchors the canvas so its attach row lines up with the
-    -- torso's own attach line, in the owner's local space (+y down,
-    -- torso center at 0) -- mirrors LegRig:SetOwner's hipLocalY
-    -- bookkeeping.
+    -- Anchors the canvas so its attach row lines up with the torso's, in the
+    -- owner's local space -- mirrors LegRig:SetOwner's hipLocalY bookkeeping.
     local torsoNeckLocalY = -self.h * 0.5 + neckRow
     self.coatOffY = round(torsoNeckLocalY - self.coatTopRow + h * 0.5)
 
@@ -345,10 +290,8 @@ end
 -- Per-frame
 -- ---------------------------------------------------------------------
 
--- Call once a frame, AFTER the owning Character's legs have updated --
--- leanX/facing/gaitBlend/phase are the same signals LegRig itself just
--- computed (Character can read them straight off self, since Character
--- IS a LegRig). ox, oy is the owner body's current position.
+-- Call once a frame, AFTER the legs update: leanX, facing, gaitBlend and phase
+-- are the signals LegRig just computed, which Character reads straight off self.
 function Torso:UpdateCloth(dt, ox, oy, leanX, facing, gaitBlend, phase)
     local canvas = self.coatCanvas
     if not canvas then return end
@@ -363,20 +306,16 @@ function Torso:UpdateCloth(dt, ox, oy, leanX, facing, gaitBlend, phase)
         canvas.dirty = true
     end
 
-    -- How flared/drifted the cloak is right now -- no wind model, so
-    -- this tracks motion alone: gaitBlend is 0 standing still (flat,
-    -- thin, centered -- just restSwing's floor) and 1 fully walking
-    -- (the full flare/drift configured above).
+    -- No wind model, so flare and drift track motion alone: gaitBlend 0 is
+    -- standing still at restSwing's floor, 1 is the full configured flare.
     local newSwing = o.restSwing + (1.0 - o.restSwing) * clamp(gaitBlend or 0, 0.0, 1.0)
     if abs(newSwing - self.swingScale) > 0.02 then
         self.swingScale = newSwing
         canvas.dirty = true
     end
 
-    -- No wind, no fabricated idle flutter -- sway tracks the body's own
-    -- lean alone, so it stays bounded by however far the body actually
-    -- leans instead of an independent oscillation that can carry the
-    -- cloak away from the body it's meant to hang on.
+    -- Sway tracks the body's own lean alone, so it stays bounded by the body
+    -- rather than being an oscillation that can carry the cloak off it.
     self.swayTarget = (leanX or 0) * o.flow
 
     local prev = self.swayX
@@ -391,22 +330,16 @@ function Torso:UpdateCloth(dt, ox, oy, leanX, facing, gaitBlend, phase)
     canvas.body:SetPosition(ox, oy + self.coatOffY)
 end
 
--- TWO panels per row, like an unbuttoned trench coat's flaps -- a gap
--- down the middle (closed at the collar, opening wider toward the hem)
--- shows whatever's underneath (the undershirt, above the hips; legs/
--- background below them, same as a real open coat) instead of sealing it
--- off. The whole pair attaches at the shoulders and drifts toward the
--- back leg's side (the -facing direction, mirroring LegRig's own
--- hipX*facing convention) as it falls, so the trailing leg ends up under
--- it while the leading leg (always drawn last -- see Character:Draw)
--- stays visible regardless of overlap. Flare/drift are scaled by
--- self.swingScale (see UpdateCloth) -- thin and centered at rest, flared
--- open while walking. Each panel is uniformly shaded: the trailing
--- (away-from-facing) one darker, the leading one full color, for a cheap
--- sense of volume. Everything is computed relative to the CANVAS CENTER
--- (mid), not its left edge -- get that wrong and it degenerates into a
--- lopsided sliver stuck to one side instead of a centered, correctly-
--- drifting cloak.
+-- Two panels per row, like an unbuttoned coat's flaps, with a centre gap that
+-- is closed at the collar and opens toward the hem so the undershirt (and, past
+-- the hips, the legs) shows through. The pair attaches at the shoulders and
+-- drifts toward the back leg's side as it falls, putting the trailing leg under
+-- it while the leading leg, drawn last, stays visible. Flare and drift scale by
+-- self.swingScale: thin and centred at rest, flared open while walking. The
+-- trailing panel is shaded darker for volume.
+--
+-- Everything is computed relative to the CANVAS CENTRE, not its left edge --
+-- get that wrong and the cloak degenerates into a lopsided sliver on one side.
 function Torso:RasterizeOvershirt(sprite)
     local o = self.overshirtCfg
     local c = o.color
@@ -416,13 +349,10 @@ function Torso:RasterizeOvershirt(sprite)
     local facing = self.facing or 1
     local swing = self.swingScale or o.restSwing
 
-    -- Where the hip line falls within the coat's own span (0..1) --
-    -- flare/drift/sway reach their FULL value by this point and hold
-    -- there for the rest of the drop, rather than only reaching full
-    -- strength at the very last row. Without this, the leg-covering
-    -- portion below the hip only ever gets a fraction of the drift (most
-    -- of it concentrated in the last texel or two at the hem), which
-    -- isn't enough to actually overlap a leg through its swing.
+    -- Where the hip line falls in the coat's own span. Flare, drift and sway
+    -- reach FULL value here and hold for the rest of the drop; without that the
+    -- leg-covering portion below the hip only ever gets a fraction of the
+    -- drift, concentrated in the last texel or two, which can't overlap a leg.
     local hipT = max(0.05, (self.coatHipRow - top) / span)
 
     local sr, sg, sb = c[1] * o.shadeMul, c[2] * o.shadeMul, c[3] * o.shadeMul
@@ -434,12 +364,9 @@ function Torso:RasterizeOvershirt(sprite)
 
     for row = top, bottom do
         local t = (row - top) / span
-        -- flare tapers smoothly across the WHOLE drop (plain t) -- a
-        -- coat that stops widening partway down looks broken, not
-        -- draped. backDrift/sway use dragT (full strength by the hip,
-        -- held for the rest of the drop) so the leg-covering portion
-        -- gets consistent coverage instead of a weak, still-ramping
-        -- offset concentrated in the last texel or two.
+        -- flare uses plain t so it tapers across the WHOLE drop; backDrift and
+        -- sway use dragT, full strength by the hip and held, so the
+        -- leg-covering portion gets consistent coverage.
         local dragT = clamp(t / hipT, 0.0, 1.0)
         local halfW = o.width + o.flare * swing * t
         local drift = -facing * (o.backDrift * swing * dragT) + self.swayX * dragT
@@ -464,10 +391,8 @@ function Torso:RasterizeOvershirt(sprite)
     end
 end
 
--- layer: "back", "front", or nil for both -- same convention as
--- LegRig:DrawLegs, so Character can sandwich its torso draw between
--- DrawOvershirt("back") and DrawOvershirt("front") the same way it
--- already sandwiches it between DrawLegs("back")/("front").
+-- layer is "back", "front", or nil for both -- the same convention as
+-- LegRig:DrawLegs, so Character can sandwich its torso draw between the two.
 function Torso:DrawOvershirt(layer)
     local canvas = self.coatCanvas
     if not canvas then return end

@@ -5,13 +5,10 @@
 
 Texture::Texture(const std::string& filepath, Filter filter) {
     int channels = 0;
-    // NOT flipped, unlike the usual OpenGL-tutorial advice: this engine's
-    // +y-down screen convention, and working through its actual uv math
-    // (uv = v_LocalPos + 0.5) shows uv.y=0 already lands at the TOP of the
-    // drawn quad -- which is exactly where stb_image's un-flipped row 0
-    // already is. If a loaded image ever comes out upside-down on your
-    // build, that derivation was wrong for your setup -- add
-    // stbi_set_flip_vertically_on_load(1) here and it's fixed.
+    // NOT flipped, unlike the usual advice: with +y down and uv = v_LocalPos +
+    // 0.5, uv.y = 0 already lands at the top of the quad, which is where
+    // stb_image's un-flipped row 0 is. If images ever load upside-down, add
+    // stbi_set_flip_vertically_on_load(1) here.
     unsigned char* data = stbi_load(filepath.c_str(), &m_Width, &m_Height, &channels, 4);
     if (!data) {
         std::cerr << "Engine Warning: Texture failed to load '" << filepath << "'\n";
@@ -37,18 +34,11 @@ void Texture::Upload(const unsigned char* pixels, unsigned int glFormat, Filter 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Default unpack alignment is 4 bytes/row. RGBA is always 4 bytes/texel
-    // so every row is already aligned regardless of width -- fine. A
-    // single-channel (GL_ALPHA) upload is 1 byte/texel though, so any row
-    // whose width isn't a multiple of 4 gets read shifted/sheared unless
-    // this is set to 1. Font's 128-wide atlas happened to already be a
-    // multiple of 4, which is why this bug was invisible so far.
+    // RGBA rows are always 4-byte aligned, but a single-channel GL_ALPHA upload
+    // is 1 byte/texel, so any width not a multiple of 4 shears unless this is 1.
     glPixelStorei(GL_UNPACK_ALIGNMENT, (glFormat == GL_ALPHA) ? 1 : 4);
     glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(glFormat), m_Width, m_Height, 0, glFormat, GL_UNSIGNED_BYTE, pixels);
-    // Global GL state, not per-texture -- reset to the default so this
-    // doesn't silently affect some other Texture's upload that runs
-    // later and assumes default unpack state (same reasoning UpdateRegion
-    // below already uses for GL_UNPACK_ROW_LENGTH).
+    // Global state, not per-texture -- reset so a later upload isn't affected.
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
@@ -65,16 +55,11 @@ void Texture::UpdateRegion(int x, int y, int w, int h, const unsigned char* pixe
     if (!m_Handle || w <= 0 || h <= 0) return;
 
     glBindTexture(GL_TEXTURE_2D, m_Handle);
-    // GL_UNPACK_ROW_LENGTH tells GL the source buffer's full row width in
-    // texels, so it can stride through `pixels` (which points at the (x,y)
-    // texel of a GetWidth()-wide buffer, not a tightly-packed w*h buffer)
-    // without the caller needing to memcpy a sub-copy first.
+    // Tells GL the source buffer's full row width so it can stride through
+    // `pixels` without the caller memcpy-ing a tightly packed sub-copy first.
     glPixelStorei(GL_UNPACK_ROW_LENGTH, m_Width);
     glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, static_cast<GLenum>(m_GLFormat), GL_UNSIGNED_BYTE, pixels);
-    // GL_UNPACK_ROW_LENGTH is global GL state, not per-texture -- reset it
-    // to the default (0 = "tightly packed") so it doesn't silently corrupt
-    // some other Texture/Font upload that runs later and assumes default
-    // unpack state.
+    // Global state -- reset to the tightly-packed default for later uploads.
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }

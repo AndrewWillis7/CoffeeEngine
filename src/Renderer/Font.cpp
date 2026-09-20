@@ -4,10 +4,9 @@
 
 namespace {
 
-// 8x8 monochrome bitmap font, ASCII 0x00-0x7F. Public domain: Daniel
-// Hepper's font8x8 (https://github.com/dhepper/font8x8), itself based on
-// IBM's public-domain VGA fonts. Row order is TOP-to-bottom; within a row,
-// bit 0 (LSB) is the LEFTMOST pixel. Control characters are left blank.
+// 8x8 monochrome bitmap font, ASCII 0x00-0x7F. Public domain: Daniel Hepper's
+// font8x8, based on IBM's public-domain VGA fonts. Rows run top-to-bottom, and
+// within a row bit 0 is the LEFTMOST pixel. Control characters stay blank.
 constexpr unsigned char kFont8x8[128][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 0x00 unused
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 0x01 unused

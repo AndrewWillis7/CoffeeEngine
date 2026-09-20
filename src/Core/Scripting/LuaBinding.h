@@ -11,12 +11,8 @@ extern "C" {
 
 namespace LuaBinding {
 
-    // =====================================================================
-    // Low-level primitives (unchanged from before the template layer
-    // existed -- this is what every binding used to call by hand). Kept
-    // public because the template layer below is built out of these, and
-    // any binding that needs to drop to metal still can.
-    // =====================================================================
+    // --- Low-level primitives. Public because the template layer is built out
+    // of them, and a binding that needs to drop to metal still can. ---------
 
     template <typename T>
     struct PtrUserdata
@@ -76,19 +72,14 @@ namespace LuaBinding {
         return static_cast<T*>(luaL_checkudata(L, index, metatableName));
     }
 
-    // =====================================================================
-    // Type registry -- one line per bound type, written once next to the
-    // type's own Register() function. Everything below reads these two
-    // traits instead of a copy-pasted `kMetatableName` string in every
-    // file that happens to touch the type.
-    // =====================================================================
+    // --- Type registry: one line per bound type, so nothing below needs a
+    // copy-pasted metatable-name string. -----------------------------------
 
-    // Specialize per bound type: struct MetatableOf<Shader> { static constexpr const char* name = "Coffee.Shader"; };
+    // Specialize per type: struct MetatableOf<Shader> { static constexpr const char* name = "Coffee.Shader"; };
     template <typename T> struct MetatableOf;
 
-    // Specialize to std::true_type for value types (Lua owns the instance,
-    // e.g. Vector2). Left false (pointer type, engine owns the instance,
-    // Lua just holds a pointer) for everything else.
+    // True for value types, where Lua owns the instance (Vector2). False for
+    // pointer types, where the engine owns it and Lua holds a pointer.
     template <typename T> struct IsValueType : std::false_type {};
 
     template <typename T, typename = void>
@@ -105,12 +96,8 @@ namespace LuaBinding {
             return CheckPtr<T>(L, index, MetatableOf<T>::name);
     }
 
-    // =====================================================================
-    // Value<T> -- stack <-> C++ conversion for one argument/return slot.
-    // This is the part that actually erases the marshaling boilerplate:
-    // every `static_cast<float>(luaL_checknumber(L, n))` line collapses
-    // into one specialization written once, used everywhere.
-    // =====================================================================
+    // --- Value<T>: stack <-> C++ conversion for one argument or return slot.
+    // This is what erases the marshaling boilerplate. ----------------------
 
     template <typename T> struct Value;
 
@@ -139,9 +126,8 @@ namespace LuaBinding {
         static void Push(lua_State* L, const std::string& v) { lua_pushstring(L, v.c_str()); }
     };
 
-    // Pointer to any registered bound type: RigidBody2D*, Shader*, etc.
-    // Push nil-checks automatically -- a null Shader* becomes Lua nil,
-    // not a dangling userdata, so callers can `if not body:GetShader() then`.
+    // Any registered pointer type. Push nil-checks, so a null Shader* becomes
+    // Lua nil rather than a dangling userdata.
     template <typename T> struct Value<T*> {
         static T* Get(lua_State* L, int idx) { return CheckPtr<T>(L, idx, MetatableOf<T>::name); }
         static void Push(lua_State* L, T* v) {
@@ -150,20 +136,15 @@ namespace LuaBinding {
         }
     };
 
-    // Registered value type (e.g. Vector2): Lua owns a fresh copy.
-    // Only participates when the type opted in via IsValueType<T>.
+    // Registered value type: Lua owns a fresh copy. Only for IsValueType<T>.
     template <typename T>
     struct ValueTypeConverter {
         static T Get(lua_State* L, int idx) { return *CheckValue<T>(L, idx, MetatableOf<T>::name); }
         static void Push(lua_State* L, T v) { PushNew<T>(L, MetatableOf<T>::name, v); }
     };
 
-    // =====================================================================
-    // Argument extraction. Handles the by-reference cases (const Foo&,
-    // Foo&) that show up in real signatures like
-    // RigidBody2D::ResolveCollisionWith(RigidBody2D& other) --
-    // dereferences a fetched pointer instead of copying the object.
-    // =====================================================================
+    // --- Argument extraction, including the by-reference cases real
+    // signatures use: deref the fetched pointer rather than copy. ----------
 
     template <typename Arg>
     decltype(auto) Extract(lua_State* L, int idx) {
@@ -172,8 +153,7 @@ namespace LuaBinding {
             using Pointee = std::remove_pointer_t<Bare>;
             return Value<Pointee*>::Get(L, idx);
         } else if constexpr (std::is_reference_v<Arg> && HasMetatable<Bare>::value && !IsValueType<Bare>::value) {
-            // Reference to an engine pointer-owned type (RigidBody2D&, etc.)
-            // -- fetch the pointer Lua actually holds and deref it, no copy.
+            // Reference to an engine-owned type: deref Lua's pointer, no copy.
             return *Value<Bare*>::Get(L, idx);
         } else if constexpr (HasMetatable<Bare>::value && IsValueType<Bare>::value) {
             return ValueTypeConverter<Bare>::Get(L, idx);
@@ -191,12 +171,8 @@ namespace LuaBinding {
             Value<Bare>::Push(L, std::forward<Ret>(v));
     }
 
-    // =====================================================================
-    // Member-function trampoline: given a pointer-to-member-function,
-    // synthesizes the `int(lua_State*)` C function Lua actually calls.
-    // `self` is stack slot 1, args start at slot 2 -- the normal
-    // `obj:Method(a, b)` calling convention.
-    // =====================================================================
+    // --- Member-function trampoline: synthesizes the int(lua_State*) Lua calls.
+    // `self` is slot 1, args from slot 2 -- the obj:Method(a, b) convention. --
 
     template <auto Fn> struct MemberFnTraits;
 
@@ -237,9 +213,8 @@ namespace LuaBinding {
         }
     };
 
-    // Plain function pointer / static member function -- no `self` at all,
-    // every Lua arg (including one passed via `:` colon-call sugar, e.g.
-    // Vector2::Distance registered as an instance method) starts at slot 1.
+    // Plain or static function: no `self`, so every arg starts at slot 1 --
+    // including one passed via colon-call sugar.
     template <auto Fn> struct FreeFnTraits;
 
     template <typename Ret, typename... Args, Ret(*Fn)(Args...)>
@@ -257,10 +232,8 @@ namespace LuaBinding {
         static int Call(lua_State* L) { return CallImpl(L, std::index_sequence_for<Args...>{}); }
     };
 
-    // Dispatches to whichever of the two shapes above matches `Fn` --
-    // Class<T>::Method<> and Table::Raw-registered free functions both
-    // go through this, so callers don't need to know or care which kind
-    // of function pointer they handed in.
+    // Dispatches to whichever shape matches `Fn`, so callers don't have to
+    // know which kind of function pointer they handed in.
     template <auto Fn>
     int Wrap(lua_State* L) {
         if constexpr (std::is_member_function_pointer_v<decltype(Fn)>)
@@ -269,12 +242,8 @@ namespace LuaBinding {
             return FreeFnTraits<Fn>::Call(L);
     }
 
-    // =====================================================================
-    // Upvalue-bound free function: `self` comes from lua_upvalueindex(1)
-    // (a captured engine context, e.g. ActorRegistry*) instead of stack
-    // slot 1. Args start at slot 1. This is the shape every `.new(...)`
-    // factory and every free-function-with-captured-context binding uses.
-    // =====================================================================
+    // --- Upvalue-bound: `self` is the captured context in upvalue(1), not
+    // slot 1, so args start at slot 1. Every .new() factory uses this. ------
 
     template <auto Fn> struct UpvalueFnTraits;
 
@@ -319,9 +288,7 @@ namespace LuaBinding {
     template <auto Fn>
     int WrapUpvalue(lua_State* L) { return UpvalueFnTraits<Fn>::Call(L); }
 
-    // Bare-global variants of the upvalue pattern above -- for engine
-    // globals that aren't table members, e.g. `SetClearColor(r,g,b)`
-    // rather than `Graphics.SetClearColor(r,g,b)`.
+    // Bare-global variants, for engine globals that aren't table members.
     template <auto Fn, typename Ctx>
     void BindFunction(lua_State* L, const char* name, Ctx* ctx) {
         lua_pushlightuserdata(L, ctx);
@@ -336,13 +303,10 @@ namespace LuaBinding {
         lua_setglobal(L, name);
     }
 
-    // =====================================================================
-    // Field properties: direct member-data access, no hand-written getter/
-    // setter needed at all. Covers the "GetX/SetX just reads/writes a
-    // field" case, which in practice is most of them.
-    // =====================================================================
+    // --- Field properties: direct member access, covering the "GetX/SetX just
+    // reads a field" case, which is most of them. --------------------------
 
-    // Plain scalar/bool/string field -- RigidBody2D::mass, Shader::overdrawScale, ...
+    // Plain scalar/bool/string field.
     template <auto Field> struct FieldTraits;
     template <typename T, typename Class, T Class::*Field>
     struct FieldTraits<Field> {
@@ -359,9 +323,8 @@ namespace LuaBinding {
         static int Set(lua_State* L) { GetSelf<Class>(L, 1)->*Field = static_cast<float>(luaL_checknumber(L, 2)) * ToNative; return 0; }
     };
 
-    // Direct Vector2 field, crossed as two raw numbers (x, y) rather than
-    // a Vector2 userdata -- matches the existing hot-path convention for
-    // GetPosition/GetVelocity (called every frame; avoids an alloc+GC).
+    // Crossed as two raw numbers rather than a userdata -- the hot-path
+    // convention for GetPosition/GetVelocity, which avoids an alloc and GC.
     template <auto Field> struct Vec2FieldTraits;
     template <typename Class, typename Vec2T, Vec2T Class::*Field>
     struct Vec2FieldTraits<Field> {
@@ -379,9 +342,7 @@ namespace LuaBinding {
         }
     };
 
-    // Direct non-owning pointer field (Shader*, CollisionShape2D*, ...)
-    // with nil-clears-it setter semantics -- matches SetShader(nil),
-    // SetCollisionShape(nil), SetPlayerConfig(nil) throughout the engine.
+    // Non-owning pointer field with nil-clears-it setter semantics.
     template <auto Field> struct PtrFieldTraits;
     template <typename T, typename Class, T* Class::*Field>
     struct PtrFieldTraits<Field> {
@@ -394,10 +355,7 @@ namespace LuaBinding {
         }
     };
 
-    // =====================================================================
-    // Fluent builders. This is the ::AddToLuaEnvironment() idea realized
-    // in C++: one line per bound function/property, appended together.
-    // =====================================================================
+    // --- Fluent builders: one line per bound function or property. --------
 
     // Binds a metatable (a class's methods + properties) for type T.
     template <typename T>
@@ -436,9 +394,8 @@ namespace LuaBinding {
             return *this;
         }
 
-        // Escape hatch for the handful of cases that don't fit the
-        // mechanical shapes above (optional args, custom formatting,
-        // operand-order-dependent metamethods like __mul).
+        // Escape hatch for what doesn't fit the mechanical shapes: optional
+        // args, custom formatting, operand-order-dependent metamethods.
         Class& Raw(const char* name, lua_CFunction fn) { Push(name, fn); return *this; }
 
         void Finish() {
@@ -476,9 +433,8 @@ namespace LuaBinding {
             return RawWithContext(name, ctx, &WrapUpvalue<Fn>);
         }
 
-        // Escape hatch for hand-written trampolines that still need a
-        // captured context as upvalue(1) -- e.g. a `.new()` with optional
-        // args the generic Function<> can't express (see RigidBody2D.new).
+        // Escape hatch for hand-written trampolines that still need a captured
+        // context in upvalue(1) -- a .new() with optional args, say.
         template <typename Ctx>
         Table& RawWithContext(const char* name, Ctx* ctx, lua_CFunction fn) {
             lua_pushlightuserdata(m_L, ctx);

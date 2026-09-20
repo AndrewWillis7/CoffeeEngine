@@ -6,7 +6,7 @@ local Prop = Class()
 ---@param y number
 ---@param w number
 ---@param h number
----@param spritePath string|nil PNG path -- if given, replaces the generated solid-color sprite with this texture
+---@param spritePath string|nil PNG path; replaces the generated solid-color sprite
 ---@param r number|nil Fill color if no spritePath given. Defaults to 1
 ---@param g number|nil Fill color if no spritePath given. Defaults to 1
 ---@param b number|nil Fill color if no spritePath given. Defaults to 1
@@ -18,9 +18,8 @@ function Prop.new(x, y, w, h, spritePath, r, g, b, a)
     self.body:SetCollisionShape(CollisionShape2D.NewBox(w / 2, h / 2))
     self.body:SetMass(1)
 
-    -- Every Prop is pixel-addressable now, not just PNG-backed ones --
-    -- with no spritePath given, this generates a solid-fill sprite
-    -- instead of falling back to a flat-color quad (see Sprite.NewSolid).
+    -- A generated sprite rather than a flat quad, so every Prop is
+    -- pixel-addressable, not just the PNG-backed ones.
     if spritePath then
         self.sprite = Sprite.Load(spritePath)
     else
@@ -31,9 +30,8 @@ function Prop.new(x, y, w, h, spritePath, r, g, b, a)
     return self
 end
 
--- solids: array of RigidBody2D to resolve collisions against this frame,
--- same convention Player:Update() already uses. worldWidth/worldHeight:
--- see Player:Update's comment -- texels, not real window pixels.
+-- solids is an array of RigidBody2D to resolve against this frame.
+-- worldWidth/worldHeight are texels, not real window pixels.
 function Prop:Update(deltaTime, solids, worldWidth, worldHeight)
     self.body:Integrate(deltaTime)
     self.body:ResolveWindowBounds(worldWidth or eWindow:GetWidth(), worldHeight or eWindow:GetHeight())

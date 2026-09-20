@@ -1,6 +1,6 @@
--- Procedural two-bone leg rig -- the shared "legs" component for the
--- player and every NPC. Owns only its own leg canvases; the owner body
--- (torso) is passed in via SetOwner and is never moved by this class.
+-- Procedural two-bone leg rig, shared by the player and every NPC. Owns only
+-- its own leg canvases; the owner body is passed in via SetOwner and is never
+-- moved from here.
 --
 -- Each leg is four modules along one chain, plus a shared hip piece:
 --
@@ -16,16 +16,14 @@
 -- L2 = boot.height, solving hip -> ANKLE. The foot hangs below the ankle
 -- as a rigid block, so leg.length (hip -> sole) is L1 + L2 + foot.height.
 --
--- ON-GRID RENDERING: nothing here is ever rotated. The whole rig
--- rasterizes into one axis-aligned PixelSprite canvas per draw layer, and
--- only when the INTEGER pose changes. Every leg pixel is a texel, so a
--- held pose is bit-identical frame to frame. Joints are rounded relative
--- to the HIP, not to world zero -- that keeps the legs welded to the
--- torso under quad.vert's u_PixelSnap, at the cost of a planted foot
--- occasionally shifting one texel as the body crosses a texel boundary.
+-- ON-GRID RENDERING: nothing here is ever rotated. The rig rasterizes into one
+-- axis-aligned canvas per draw layer, and only when the INTEGER pose changes,
+-- so a held pose is bit-identical frame to frame. Joints round relative to the
+-- HIP rather than world zero, which keeps the legs welded to the torso under
+-- u_PixelSnap at the cost of a planted foot occasionally shifting one texel as
+-- the body crosses a boundary.
 --
--- Ground comes from Physics.RaycastDown (Core/Physics/Raycast.h) and the
--- math kernels from the IK table (Core/Gameplay/LegIK.h). See
+-- Ground comes from Physics.RaycastDown and the math from the IK table. See
 -- scripts/api/IK.txt for the full knob reference.
 
 local Class = require("core.Class")
@@ -49,20 +47,16 @@ LegRig.Defaults = {
         taper = 1, rear = 1, layer = "front", color = nil,
     },
 
-    -- Fraction of full leg length the hip rests at while WALKING, and the
-    -- height the owner's collider is built around (GetStandHeight).
-    -- Anything below ~0.95 keeps a permanent, stable knee bend; 1.0
-    -- parks the solver on its singular fully-extended pose and leaves a
-    -- swept-out foot unable to reach the ground.
+    -- Fraction of leg length the hip rests at while WALKING, and the height the
+    -- owner's collider is built around. Below ~0.95 keeps a stable knee bend;
+    -- 1.0 parks the solver on its singular pose and strands a swept-out foot.
     stand = 0.88,
 
-    -- Fraction of full leg length the hip rests at while STANDING STILL.
-    -- nil = same as `stand` (no change from walking). 1.0 = dead straight
-    -- legs at rest. The difference is applied as a whole-texel RISE of
-    -- the hip frame, carried to the torso through GetBobOffset -- the
-    -- collider never moves, so the drawn body is that many texels taller
-    -- than its box while idle. Capped per frame by what the planted legs
-    -- can actually reach, so a foot never floats on uneven ground.
+    -- Same, while STANDING STILL. nil matches `stand`; 1.0 is dead straight
+    -- legs at rest. Applied as a whole-texel RISE of the hip frame carried to
+    -- the torso through GetBobOffset -- the collider never moves, so the drawn
+    -- body is that many texels taller than its box while idle. Capped by what
+    -- the planted legs can reach, so a foot never floats on uneven ground.
     idleStand = nil,
 
     -- World distance per FULL gait cycle. Sweep amplitude is DERIVED
@@ -83,18 +77,10 @@ LegRig.Defaults = {
     idleSpeed  = 4,   -- |vx| below this counts as standing still
     gaitBlend  = 8,   -- how fast the walk cycle fades in/out
 
-    -- =================================================================
-    -- SPRINT / CROUCH
-    -- =================================================================
-    -- Selected each frame by whoever drives this rig (Player:HandleInput
-    -- reading Shift/Ctrl, an NPC's own AI, ...) via SetGaitState("walk" /
-    -- "sprint" / "crouch"). strideScale/stepHeightScale multiply `stride`
-    -- and `stepHeight` above; sink is a whole-texel amount the hip gets
-    -- pulled DOWN while crouching (bent knees, torso sinking toward the
-    -- ground -- the same trick GetBobOffset already uses for landing/
-    -- idle, just fed a third input). All three blend in/out over
-    -- gaitTuneSpeed rather than snapping, same Approach-based easing as
-    -- everything else in this rig.
+    -- Sprint / crouch, selected each frame by whoever drives this rig via
+    -- SetGaitState. The scales multiply `stride` and `stepHeight`; `sink` pulls
+    -- the hip DOWN in whole texels while crouching. All three blend over
+    -- gaitTuneSpeed rather than snapping.
     sprint = { strideScale = 1.35, stepHeightScale = 1.25 },
     crouch = { strideScale = 0.55, stepHeightScale = 0.45, sink = 3 },
     gaitTuneSpeed = 10,
@@ -112,43 +98,35 @@ LegRig.Defaults = {
     pushHeight = 2,   -- texels the ankle rises while the toe stays planted
     pushToe    = 2,   -- texels the foot block narrows to during push-off
 
-    -- =================================================================
-    -- WEIGHT SHIFTING
-    -- =================================================================
-    -- Everything here moves the HIP, never the foot. A planted sole is
-    -- anchored to the ground for the whole of stance; the body is what
-    -- rises, drops, tilts and leans over it.
+    -- Weight shifting. Everything here moves the HIP, never the foot: a planted
+    -- sole is anchored for the whole of stance, and the body rises, drops,
+    -- tilts and leans over it.
     weight = {
-        -- Texels the hip drops on the leg carrying the body -- the
-        -- stance knee flexing under load. The single biggest "has mass"
-        -- cue in the rig. 1 is plenty at 32px; 2 reads as heavy/armoured.
+        -- Texels the hip drops on the loaded leg: the stance knee flexing, and
+        -- the biggest "has mass" cue here. 1 is plenty at 32px, 2 reads heavy.
         loadDip = 1,
 
-        -- PELVIC TILT: texels the UNLOADED hip socket drops below the
-        -- loaded one. This is the opposite of intuition and it is what
-        -- real gait does -- the swing-side pelvis drops because nothing
-        -- is holding it up. Sums to zero across the legs, so it tilts
-        -- the pelvis without moving the body.
+        -- Texels the UNLOADED socket drops below the loaded one. Counter-
+        -- intuitive, but it is what real gait does: the swing-side pelvis drops
+        -- because nothing holds it up. Sums to zero, so the body doesn't move.
         tilt = 1,
 
-        -- Landing absorb. Captured from the PREVIOUS frame's vy, because
-        -- collision has already zeroed the real one by the time the legs
-        -- update.
+        -- Landing absorb, from the PREVIOUS frame's vy -- collision has already
+        -- zeroed the real one by the time the legs update.
         landDip     = 2,
         landRecover = 14,
         landSpeed   = 200,  -- |vy| at impact producing a full landDip
 
-        -- Horizontal lean. Shifts the hips AND the torso together, so
-        -- the body moves over the planted feet rather than the legs
-        -- sliding under a fixed torso. 0 disables.
+        -- Shifts hips AND torso together, so the body moves over the planted
+        -- feet rather than the legs sliding under a fixed torso. 0 disables.
         lean      = 2,      -- max texels
         leanSpeed = 25,     -- |vx| at which full lean is reached
         leanRate  = 9,
     },
 
-    -- How fast a foot eases across a DISCONTINUITY (a step up, a facing
-    -- flip, landing). Not a lag filter on position -- continuous motion
-    -- is tracked exactly; only the leftover offset decays.
+    -- How fast a foot eases across a DISCONTINUITY -- a step up, a facing flip,
+    -- a landing. Not a lag filter: continuous motion is tracked exactly, and
+    -- only the leftover offset decays.
     smoothing = 24,
 
     -- How far below full extension to keep searching for ground.
@@ -158,16 +136,13 @@ LegRig.Defaults = {
     airTuck  = 0.68,
     airReach = 0.97,
 
-    -- hipX is in LOCAL texels, mirrored by facing. phase offsets the leg
-    -- in the gait cycle (0.5 = opposed). layer picks which canvas, and
-    -- therefore which side of the torso. shade is baked into the
-    -- rasterized pixels (not the body tint, which can't tell two legs on
-    -- one canvas apart) to fake depth on the far leg.
+    -- hipX is LOCAL texels, mirrored by facing; phase offsets the gait cycle
+    -- (0.5 = opposed); layer picks the canvas and so which side of the torso;
+    -- shade is baked into the pixels (not the body tint, which can't tell two
+    -- legs on one canvas apart) to fake depth on the far leg.
     --
-    -- The two stock legs are staggered one texel each way rather than
-    -- sharing a hip: with both at hipX = 0 the sweep is the only thing
-    -- separating them, so a standing character's silhouette collapses to
-    -- a single leg.
+    -- Staggered one texel each way rather than sharing a hip: at hipX = 0 the
+    -- sweep is all that separates them, so a standing silhouette collapses.
     legs = {
         { hipX =  1, phase = 0.0, layer = "front", shade = 1.00 },
         { hipX = -1, phase = 0.5, layer = "back",  shade = 0.70 },
@@ -397,16 +372,14 @@ function LegRig:InitLegRig(config)
         end
     end
 
-    -- Whole texels: an owner subtracts this from its total height to
-    -- size its torso, and a fractional value there means a fractional
-    -- torso sprite, which Sprite.NewSolid can't author.
+    -- Whole texels: an owner subtracts this to size its torso, and a fraction
+    -- there would mean a fractional sprite, which Sprite.NewSolid can't author.
     self.standHeight = texels(self.legLength * self.stand, 0)
 
-    -- Idle straightening. DERIVED, not tuned: the whole-texel gap between
-    -- the walking hip height (which the collider is built around) and the
-    -- idle one. Whole texels because it is folded into bobY, and a
-    -- fractional rise would put the torso and legs on different subpixel
-    -- offsets. Never negative -- idleStand below stand is ignored rather
+    -- DERIVED, not tuned: the whole-texel gap between the walking hip height
+    -- (what the collider is built around) and the idle one. Whole because it
+    -- folds into bobY, and a fraction would split torso and legs onto different
+    -- subpixel offsets. Never negative -- a lower idleStand is ignored rather
     -- than sinking the body into its own collider.
     local idleStand = clamp(pick(config.idleStand, D.idleStand) or self.stand, 0.0, 1.0)
     self.idleLift = max(0, texels(self.legLength * idleStand, 0) - self.standHeight)
@@ -419,20 +392,18 @@ end
 -- Canvas allocation
 -- ---------------------------------------------------------------------
 
--- One PixelSprite per draw layer that actually has something on it,
--- sized once to the worst-case footprint the solver can produce and
--- reused forever after.
+-- One PixelSprite per non-empty draw layer, sized once to the worst-case
+-- footprint the solver can produce and reused forever.
 --
--- WIDTH stacks four independent reaches: the gait sweep, the knee's
--- sideways bulge when the leg folds, half the widest module, and the
--- pelvis with its rear offset. The bulge is MEASURED (IK.KneeBulge)
--- rather than bounded, because the closed-form bound overestimates the
--- stock player by more than half and every texel costs the lighting pass.
+-- WIDTH stacks four independent reaches: the gait sweep, the knee's sideways
+-- bulge when the leg folds, half the widest module, and the pelvis with its
+-- rear offset. The bulge is MEASURED rather than bounded, because the closed
+-- form overestimates the stock player by more than half and every texel costs
+-- the lighting pass.
 --
--- BOTH DIMENSIONS ARE FORCED EVEN, and that is load-bearing: the canvas
--- body is centered on the owner's position, so an odd size puts its edge
--- on a half-texel and offsets the canvas's pixel grid from the torso's,
--- which makes the hip seam crawl.
+-- BOTH DIMENSIONS ARE FORCED EVEN, and that is load-bearing: the canvas is
+-- centred on the owner's position, so an odd size puts its edge on a half-texel
+-- and offsets its grid from the torso's, which makes the hip seam crawl.
 function LegRig:BuildCanvases()
     self.canvases = {}
     if #self.legs == 0 then
@@ -472,12 +443,11 @@ function LegRig:BuildCanvases()
     local w = ceil(halfW) * 2
     if w % 2 == 1 then w = w + 1 end
 
-    -- Rows above the hip line: bob, idle straightening, pelvic tilt (plus
-    -- a row for the shear), and the pelvis itself. bob and idleLift are
-    -- reserved as a SUM rather than a max: the idle rise is smoothed
-    -- separately from the gait blend, so for a few frames around a
-    -- start/stop the two can overlap. Rows below run to the sole, which
-    -- is anchored at baseHipRow and does NOT move with the dip.
+    -- Rows above the hip line: bob, idle straightening, pelvic tilt (plus one
+    -- for the shear), and the pelvis. bob and idleLift are reserved as a SUM,
+    -- not a max -- the idle rise smooths separately from the gait blend, so
+    -- around a start or stop the two overlap for a few frames. Rows below run
+    -- to the sole, anchored at baseHipRow, which does NOT move with the dip.
     self.baseHipRow = 1 + self.bob + self.idleLift + self.tiltSlack
                       + ((hip.height > 0) and hip.rise or 0)
     -- + crouch sink: the hip pulls further DOWN (toward the sole) while
@@ -521,17 +491,15 @@ end
 -- Wiring
 -- ---------------------------------------------------------------------
 
--- hipLocalY is the hip's offset from the OWNER BODY'S CENTER, +y down --
--- normally the torso's bottom edge (torsoHeight / 2). Rounded to a whole
--- texel: it anchors the canvas's pixel grid to the owner's, and half a
--- texel of offset there is exactly the hip-seam crawl the even-size rule
--- in BuildCanvases exists to prevent.
+-- hipLocalY is the hip's offset from the OWNER'S CENTRE, +y down, normally the
+-- torso's bottom edge. Rounded to a whole texel: it anchors the canvas grid to
+-- the owner's, and half a texel there is the hip-seam crawl BuildCanvases'
+-- even-size rule exists to prevent.
 function LegRig:SetOwner(body, hipLocalY)
     self.owner = body
     self.hipLocalY = round(hipLocalY or 0.0)
 
-    -- Integer by construction (integer hipLocalY, integer baseHipRow,
-    -- even canvasH), which keeps torso and legs on the same grid.
+    -- Integer by construction, which keeps torso and legs on the same grid.
     self.canvasOffY = self.hipLocalY - self.baseHipRow + self.canvasH * 0.5
 
     for _, leg in ipairs(self.legs) do
@@ -545,9 +513,8 @@ function LegRig:GetStandHeight() return self.standHeight or 0 end
 function LegRig:GetLegLength()   return self.legLength or 0 end
 function LegRig:HasLegs()        return #self.legs > 0 end
 
--- Whole-texel vertical offset the owner should draw its torso at this
--- frame, so the body rides the walk (and rises onto straight legs at
--- idle). Negative is up.
+-- Whole-texel vertical offset the owner draws its torso at, so the body rides
+-- the walk and rises onto straight legs at idle. Negative is up.
 function LegRig:GetBobOffset() return self.bobY or 0 end
 
 function LegRig:SetFacing(f)
@@ -555,17 +522,14 @@ function LegRig:SetFacing(f)
 end
 function LegRig:GetFacing() return self.facing end
 
--- Switches the walk/sprint/crouch gait tuning -- call every frame from
--- whatever drives this rig, e.g. Player:HandleInput reading Shift/Ctrl.
--- Not applied instantly: UpdateLegs blends stride/step/sink toward
--- whatever state is current here at gaitTuneSpeed, so flipping states
+-- Call every frame from whatever drives this rig. Not applied instantly:
+-- UpdateLegs blends toward the current state at gaitTuneSpeed, so flipping
 -- mid-stride eases rather than pops.
 function LegRig:SetGaitState(state)
     self.gaitState = state or "walk"
 end
 
--- World-space SOLE position (where the foot meets the ground), not the
--- ankle -- the point gameplay cares about for footstep dust and sound.
+-- World SOLE position, not the ankle -- what footstep dust and sound want.
 function LegRig:GetFootPosition(index)
     local leg = self.legs[index]
     if not leg then return nil end
@@ -580,18 +544,15 @@ end
 -- Per-frame
 -- ---------------------------------------------------------------------
 
--- Named UpdateLegs/DrawLegs rather than Update/Draw so a subclass can
--- define its own without shadowing these. Call AFTER the owner's
--- collision has resolved -- the legs react to where the torso ended up,
--- they don't predict it.
+-- Named UpdateLegs/DrawLegs rather than Update/Draw so a subclass can define
+-- its own without shadowing these. Call AFTER the owner's collision resolves --
+-- the legs react to where the torso ended up, they don't predict it.
 --
--- Three stages: solve the gait in CONTINUOUS world space (where the
--- no-slide math lives), quantize to whole texels RELATIVE TO THE HIP
--- (where the pixel-art rules live), then rasterize -- but only if that
--- quantized pose isn't the one already on the canvas.
+-- Three stages: solve the gait in CONTINUOUS world space, where the no-slide
+-- math lives; quantize to whole texels RELATIVE TO THE HIP, where the pixel-art
+-- rules live; then rasterize, but only if that pose isn't already on the canvas.
 --
--- Extra arguments are ignored; ground no longer comes from a caller
--- supplied list, so an older `self:UpdateLegs(dt, solids)` call is safe.
+-- Extra arguments are ignored, so an older UpdateLegs(dt, solids) call is safe.
 function LegRig:UpdateLegs(dt)
     if not self.owner or #self.legs == 0 then return end
 
@@ -659,17 +620,13 @@ function LegRig:UpdateLegs(dt)
     local amp  = stride * self.stanceRatio * 0.5 * self.blend
     local peakLift, totalLoad = 0.0, 0.0
 
-    -- Smallest whole-texel reach left over across the PLANTED legs: how
-    -- far the hip frame may rise before one of them would have to leave
-    -- the ground. Bounds the idle straightening below.
+    -- Smallest reach left across the PLANTED legs: how far the hip may rise
+    -- before one would leave the ground. Bounds the idle straightening below.
     local minSlack = math.huge
 
-    -- The whole per-leg WORLD-SPACE solve -- gait sample, ground
-    -- raycast, target clamp, discontinuity smoothing -- is one call into
-    -- IK.SolveLegFrame instead of four (IK.GaitPose, Physics.RaycastDown,
-    -- two IK.Approach). See its comment in ScriptBindings.cpp for the
-    -- exact argument order; it mirrors this loop's old body 1:1; only
-    -- the boundary-crossing count changed, not the arithmetic.
+    -- The whole per-leg world solve -- gait sample, ground raycast, target
+    -- clamp, discontinuity smoothing -- is one IK.SolveLegFrame call instead of
+    -- four crossings. Same arithmetic, fewer boundaries.
     for _, leg in ipairs(self.legs) do
         local m = leg.modules
         local hipX = ox + leg.hipX * self.facing
@@ -730,13 +687,11 @@ function LegRig:UpdateLegs(dt)
                      + self.hipTilt * (1.0 / n - leg.share) * n * self.blend)
     end
 
-    -- Idle straightening: rise onto straight legs as the walk fades out.
-    -- Driven off (1 - blend) so it is the exact complement of the gait,
-    -- then smoothed again so a landing (blend already ~0 from the air)
-    -- eases up instead of popping two texels in one frame. Grounded
-    -- only -- airborne poses belong to airTuck/airReach. Capped by the
-    -- planted legs' slack AFTER smoothing, so stepping down off a ledge
-    -- mid-rise can never lift a foot off the ground.
+    -- Rise onto straight legs as the walk fades out. Driven off (1 - blend) so
+    -- it is the exact complement of the gait, then smoothed again so a landing
+    -- eases up instead of popping two texels in one frame. Grounded only, and
+    -- capped by the planted legs' slack AFTER smoothing, so stepping off a
+    -- ledge mid-rise can never lift a foot.
     local idleTarget = 0.0
     if grounded and self.idleLift > 0 and minSlack < math.huge then
         idleTarget = self.idleLift * (1.0 - self.blend)
@@ -869,21 +824,18 @@ function LegRig:RasterizeLeg(sprite, leg)
     end
 end
 
--- Sheared vertical column runs rather than horizontal rows, so the block
--- TILTS with the pelvis.
+-- Sheared vertical column runs rather than horizontal rows, so the block TILTS
+-- with the pelvis.
 --
--- Every number here is computed in FORWARD-LOCAL space (+1 = the way we
--- face) and mirrored to canvas columns only on the final line. That is
--- load-bearing, not tidiness: round() is round-half-up, which is NOT
--- symmetric under negation, so any .5 rounded in canvas space biases one
--- facing and not the other. Rounding forward-local and mirroring
+-- Every number is computed in FORWARD-LOCAL space and mirrored to canvas
+-- columns only at the end. That is load-bearing: round() is round-half-up,
+-- which is not symmetric under negation, so a .5 rounded in canvas space would
+-- bias one facing and not the other. Rounding forward-local and mirroring
 -- integers makes walking left an exact mirror of walking right.
--- The whole per-column shear loop (up to hip.width separate FillRects)
--- is one call into IK.RasterizeHip -- see its comment in
--- ScriptBindings.cpp. It reads leg.hipX/leg.hipRow straight off
--- self.legs and self.hipColRows straight off self, so the only things
--- left to compute here are the ones IK.RasterizeHip doesn't own: the
--- guard clauses and the color unpack.
+--
+-- The per-column shear loop is one IK.RasterizeHip call, which reads leg.hipX,
+-- leg.hipRow and self.hipColRows directly -- leaving only the guards and the
+-- color unpack here.
 function LegRig:RasterizeHip(sprite)
     local h = self.hip
     if h.height <= 0 then return end

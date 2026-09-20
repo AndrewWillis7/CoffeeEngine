@@ -32,14 +32,9 @@ extern "C" {
 #include <lauxlib.h>
 }
 
-// =====================================================================
-// Type registry -- every bound type's metatable name and value/pointer
-// kind, in one place, ahead of all the binding code below that uses it.
-// This used to be a `kMetatableName` constant copy-pasted (with a
-// "must match" comment) into every file that touched the type; now it's
-// one line, written once, and the compiler enforces the "must match"
-// part for free.
-// =====================================================================
+// --- Type registry: every bound type's metatable name, in one place. ------
+// One line per type, written once, with the compiler enforcing the match that
+// used to be a copy-pasted constant and a "must match" comment per file.
 namespace LuaBinding {
     template <> struct MetatableOf<Vector2>           { static constexpr const char* name = "Coffee.Vector2"; };
     template <> struct MetatableOf<RigidBody2D>        { static constexpr const char* name = "Coffee.RigidBody2D"; };
@@ -54,8 +49,7 @@ namespace LuaBinding {
 
     template <> struct IsValueType<Vector2> : std::true_type {};
 
-    // Project-specific scalar conversion -- MouseButton is an engine enum,
-    // not something the generic template header should know about, but
+    // MouseButton is an engine enum the generic header shouldn't know about, but
     // the trait system is extensible from any translation unit.
     template <> struct Value<MouseButton> {
         static MouseButton Get(lua_State* L, int idx) { return static_cast<MouseButton>(luaL_checkinteger(L, idx)); }
@@ -68,11 +62,8 @@ namespace {
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 constexpr float kRadToDeg = 180.0f / 3.14159265358979323846f;
 
-// =====================================================================
-// Vector2 -- value type. Operators map straight onto Method<>; __mul's
-// operand-order ambiguity and the custom __tostring format are the only
-// two things that need a hand-written trampoline.
-// =====================================================================
+// --- Vector2: value type. Operators map straight onto Method<>; only __mul's
+// operand order and __tostring's format need hand-written trampolines. -----
 
 int Lua_Vector2New(lua_State* L) {
     float x = static_cast<float>(luaL_optnumber(L, 1, 0.0));
@@ -88,9 +79,7 @@ int Lua_Vector2Set(lua_State* L) {
     return 0;
 }
 
-// Handles both `vec * number` and `number * vec` -- Lua calls __mul with
-// whichever operand order was written, and only one side is guaranteed
-// to be our userdata.
+// Both `vec * number` and `number * vec`: only one side is our userdata.
 int Lua_Vector2Mul(lua_State* L) {
     bool firstIsVector = lua_isuserdata(L, 1);
     Vector2* vec = firstIsVector ? LuaBinding::GetSelf<Vector2>(L, 1) : LuaBinding::GetSelf<Vector2>(L, 2);
@@ -127,13 +116,9 @@ void RegisterVector2(lua_State* L) {
     LuaBinding::Table(L).Raw("new", &Lua_Vector2New).Finish("Vector2");
 }
 
-// =====================================================================
-// RigidBody2D -- pointer type, owned by ActorRegistry. Most of its
-// surface is direct field access (Property/Vec2Property/PtrProperty) or
-// a plain method call; only position/rotation/scale (nested inside
-// `transform`, rotation also unit-converted) and the optional-size
-// constructor need a hand-written trampoline.
-// =====================================================================
+// --- RigidBody2D: pointer type, owned by ActorRegistry. Mostly direct field
+// access; only transform-nested position/rotation/scale and the optional-size
+// constructor need trampolines. -------------------------------------------
 
 int Lua_RigidBody2DNew(lua_State* L) {
     float x = static_cast<float>(luaL_checknumber(L, 1));
@@ -162,8 +147,7 @@ int Lua_RigidBody2DSetPosition(lua_State* L) {
     return 0;
 }
 
-// Rotation crosses the Lua boundary in degrees -- Transform2D itself stores
-// radians (see the comment in Core/Math/Transform2D.h).
+// Degrees at the boundary; Transform2D stores radians.
 int Lua_RigidBody2DGetRotation(lua_State* L) {
     lua_pushnumber(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->transform.rotation * kRadToDeg);
     return 1;
@@ -174,12 +158,8 @@ int Lua_RigidBody2DSetRotation(lua_State* L) {
     return 0;
 }
 
-// Scale is a per-object visual multiplier on top of GetSize()/SetSize()'s
-// logical/collision size -- deliberately decoupled (see Renderer2D's
-// drawSize computation) so scaling a sprite up/down for a visual effect
-// never silently resizes its CollisionShape2D underneath it. sy defaults
-// to sx when omitted, so body:SetScale(2) means uniform 2x rather than
-// forcing every non-uniform-scale caller to repeat the same number twice.
+// A visual multiplier on top of SetSize()'s logical/collision size, decoupled
+// so a visual scale never silently resizes the collider. sy defaults to sx.
 int Lua_RigidBody2DGetScale(lua_State* L) {
     RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
     lua_pushnumber(L, self->transform.scale.x);
@@ -215,10 +195,8 @@ int Lua_RigidBody2DGetSprite(lua_State* L) {
     return 1;
 }
 
-// Hand-written rather than a plain PtrProperty because attaching a sprite
-// also defaults the body's draw size to the sprite's native pixel size --
-// PtrProperty's generated setter is a bare field assignment with no room
-// for that. SetSize() afterward still overrides this like any other body.
+// Not a plain PtrProperty: attaching a sprite also defaults the body's draw
+// size to the sprite's native size, which a bare field assignment can't do.
 int Lua_RigidBody2DSetSprite(lua_State* L) {
     RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
     PixelSprite* sprite = LuaBinding::Value<PixelSprite*>::Get(L, 2);
@@ -354,15 +332,9 @@ int Lua_PixelSpriteLoad(lua_State* L) {
     return 1;
 }
 
-// Sprite.NewSolid(w, h, r, g, b, a) -- builds a blank, in-memory sprite
-// filled solid with the given color, no PNG involved (see PixelSprite's
-// (int,int,Color) constructor and ActorRegistry::CreateSolidSprite).
-// This is the "split a basic flat-color square into individual pixels"
-// primitive -- StaticBody/Prop/Player/ArtObject all call this instead of
-// leaving a plain flat-color quad, so every basic body is pixel-
-// addressable (and therefore lightable/eventually destructible) by
-// default. a defaults to fully opaque, same convention as
-// Lua_RigidBody2DSetColor.
+// Sprite.NewSolid(w, h, r, g, b, a) -- a blank in-memory sprite, no PNG. Every
+// basic body uses this instead of a flat quad so it is pixel-addressable, and
+// therefore lightable and eventually destructible, by default.
 int Lua_PixelSpriteNewSolid(lua_State* L) {
     int w = static_cast<int>(luaL_checkinteger(L, 1));
     int h = static_cast<int>(luaL_checkinteger(L, 2));
@@ -487,11 +459,7 @@ void RegisterPixelSprite(lua_State* L, ActorRegistry* actors) {
 
 
 
-// =====================================================================
-// PlayerActorConfig -- pointer type, owned by ActorRegistry. Every field
-// is a direct public float/bool, so this whole binding is Property<>
-// calls plus a zero-arg factory.
-// =====================================================================
+// --- PlayerActorConfig: all direct fields, so Property<> plus a factory. ---
 
 void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Class<PlayerActorConfig>(L, LuaBinding::MetatableOf<PlayerActorConfig>::name)
@@ -503,16 +471,8 @@ void RegisterPlayerActorConfig(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L).Function<&ActorRegistry::CreatePlayerConfig>("new", actors).Finish("PlayerActorConfig");
 }
 
-// =====================================================================
-// Camera2D -- pointer type, owned by ActorRegistry. viewportSize/
-// targetAspect/focusOffset are direct Vector2 fields (Vec2Property, same
-// hot-path "two raw numbers" convention as RigidBody2D::velocity/size);
-// followTarget is a direct RigidBody2D* field (PtrProperty, nil-clears-it
-// setter, same convention as RigidBody2D::shader/collisionShape/
-// playerConfig); followSmoothing/active are plain scalar fields. zoomOut
-// is bound as Method<>, not Property<>, because it's a private field
-// behind a clamping setter (SetZoomOut rejects <= 0) -- see Camera2D.h.
-// =====================================================================
+// --- Camera2D: mechanical field bindings, except zoomOut, which is Method<>
+// rather than Property<> because it sits behind a clamping setter. ---------
 
 void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Class<Camera2D>(L, LuaBinding::MetatableOf<Camera2D>::name)
@@ -529,21 +489,10 @@ void RegisterCamera2D(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L).Function<&ActorRegistry::CreateCamera>("new", actors).Finish("Camera2D");
 }
 
-// =====================================================================
-// LightEmitterConfig -- pointer type, owned by ActorRegistry. Same
-// pattern as PlayerActorConfig: attach via RigidBody2D::lightEmitter
-// (LuaBinding::PtrProperty, see RegisterRigidBody2D above), consumed
-// every frame by LightingSystem, never touched by DrawBody itself.
-//
-// type/color/flickerColorShift are hand-written (an enum<->string
-// mapping and 4-scalar RGBA reads/writes, same shape as
-// Lua_CollisionShape2DGetType and Lua_RigidBody2DSetColor respectively
-// -- neither is a mechanical 1:1 Property<> mapping). coneAngleRad/
-// coneDirectionRad cross the Lua boundary in DEGREES via ScaledProperty,
-// same "radians internally, degrees at the boundary" convention
-// RigidBody2D::SetRotation/angularVelocity already use. Everything else
-// is a plain public float/bool, so those stay Property<>.
-// =====================================================================
+// --- LightEmitterConfig: attached via RigidBody2D::lightEmitter, consumed by
+// LightingSystem each frame. type/color/flickerColorShift are hand-written (an
+// enum<->string map and 4-scalar RGBA); the cone angles cross in degrees via
+// ScaledProperty; everything else is a plain Property<>. -------------------
 
 int Lua_LightEmitterGetType(lua_State* L) {
     LightEmitterConfig* self = LuaBinding::GetSelf<LightEmitterConfig>(L, 1);
@@ -617,16 +566,8 @@ void RegisterLightEmitterConfig(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L).Function<&ActorRegistry::CreateLightEmitter>("new", actors).Finish("LightEmitterConfig");
 }
 
-// =====================================================================
-// Lighting -- bare global UpdateLighting(deltaTime), not a table
-// function -- same "called once a frame, needs more than one captured
-// context pointer" shape as SyncCamera() above, and the same reasoning:
-// re-resolving anything per-object here instead of once a frame would be
-// wasteful. Needs both a LightingSystem* (to run the pass) and an
-// ActorRegistry* (for LightingSystem::Update to scan), so this bypasses
-// BindFunction/Table::Function the same way Lua_DrawBody/Lua_SyncCamera
-// already do, and pushes both closures by hand.
-// =====================================================================
+// --- Lighting: a bare global, because it needs two captured context pointers
+// and Table::Function only carries one. Hand-pushed closure. ---------------
 
 int Lua_UpdateLighting(lua_State* L) {
     float dt = static_cast<float>(luaL_checknumber(L, 1));
@@ -643,28 +584,15 @@ void RegisterLighting(lua_State* L, LightingSystem* lighting, ActorRegistry* act
     lua_setglobal(L, "UpdateLighting");
 }
 
-// =====================================================================
-// TerrainChunk -- pointer type, owned by ActorRegistry. Same shape as
-// LightEmitterConfig: attach via RigidBody2D::terrain (see
-// RegisterRigidBody2D above), consumed every frame by TerrainSystem.
+// --- TerrainChunk: attached via RigidBody2D::terrain, ticked by TerrainSystem.
+// Almost all mechanical Property<>, with two exceptions this file has
+// elsewhere too: colors cross as raw scalars rather than userdata, and the
+// methods taking PixelSprite&/RigidBody2D& are plain Method<> because
+// Extract<> already handles bound-type references.
 //
-// Almost the entire surface is mechanical Property<> mapping onto plain
-// public float/int fields, because that's what the config IS. The two
-// exceptions are the same two this file already has elsewhere:
-//   - Colors cross as 3-4 raw scalars, not a userdata (same convention
-//     as Lua_RigidBody2DSetColor and LightEmitterConfig's color), so each
-//     one is a thin wrapper over a shared helper rather than a
-//     Property<>.
-//   - Generate/Update/ResolveBody/SurfaceWorldY all take references to
-//     OTHER bound types (PixelSprite&, RigidBody2D&), which LuaBinding's
-//     Extract<> already handles natively -- so those ARE plain Method<>
-//     bindings despite looking like they'd need trampolines.
-//
-// Note what ISN'T bound: nothing writes m_SurfaceY or the blade list from
-// Lua. Those are generated data derived from `seed` + the sprite's size,
-// and letting a script poke them would let the collision heightmap and
-// the pixels you can see disagree.
-// =====================================================================
+// Note what is NOT bound: nothing writes m_SurfaceY or the blade list. Those
+// are generated from `seed` and the sprite size, and letting a script poke
+// them would let the collision heightmap and the visible pixels disagree. ---
 
 int SetTerrainColorField(lua_State* L, Color TerrainChunk::* field) {
     TerrainChunk* self = LuaBinding::GetSelf<TerrainChunk>(L, 1);
@@ -733,18 +661,10 @@ void RegisterTerrainChunk(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L).Function<&ActorRegistry::CreateTerrainChunk>("new", actors).Finish("TerrainChunk");
 }
 
-// =====================================================================
-// Terrain -- bare global UpdateTerrain(deltaTime), exactly the same
-// two-upvalue hand-rolled closure UpdateLighting() above uses, for
-// exactly the same reason (needs both the subsystem and the registry it
-// scans, and BindFunction/Table::Function only capture one context
-// pointer).
-//
-// Call this once a frame, AFTER gameplay has moved (so the grass reacts
-// to where the player actually is this frame) and BEFORE
-// UpdateLighting() (so the pixels it just wrote get lit this frame
-// rather than next).
-// =====================================================================
+// --- Terrain: same two-upvalue closure as UpdateLighting, for the same reason.
+// Call once a frame, AFTER gameplay has moved and BEFORE UpdateLighting(), so
+// the grass reacts to this frame's positions and the pixels it writes get lit
+// this frame rather than next. -------------------------------------------
 
 int Lua_UpdateTerrain(lua_State* L) {
     float dt = static_cast<float>(luaL_checknumber(L, 1));
@@ -761,13 +681,8 @@ void RegisterTerrainSystem(lua_State* L, TerrainSystem* terrain, ActorRegistry* 
     lua_setglobal(L, "UpdateTerrain");
 }
 
-// =====================================================================
-// Graphics -- bare globals (SetClearColor(...), not Graphics.SetClearColor),
-// bound to a captured IGraphicsContext*. SetClearColor maps 1:1 onto the
-// C++ method; DrawDebugQuad assembles a Transform2D/Vector2/Color out of
-// 9 scalar Lua args (plus a degrees->radians conversion), which isn't a
-// positional 1:1 mapping, so it stays hand-written.
-// =====================================================================
+// --- Graphics: bare globals over a captured IGraphicsContext*. DrawDebugQuad
+// assembles a transform out of 9 scalars, so it stays hand-written. --------
 
 int Lua_DrawDebugQuad(lua_State* L) {
     float x = static_cast<float>(luaL_checknumber(L, 1));
@@ -795,12 +710,8 @@ void RegisterGraphics(lua_State* L, IGraphicsContext* graphics) {
     LuaBinding::BindRawFunction(L, "DrawDebugQuad", graphics, &Lua_DrawDebugQuad);
 }
 
-// =====================================================================
-// Window -- eWindow global. GetWidth/GetHeight/SetIcon/SetFullscreen/
-// IsFullscreen map straight onto IWindow's (virtual) methods -- pointer-
-// to-member-function dispatch is virtual automatically, no special-
-// casing needed for that.
-// =====================================================================
+// --- Window: the eWindow global. Pointer-to-member dispatch is already
+// virtual, so IWindow's methods map straight across. -----------------------
 
 void RegisterWindow(lua_State* L, IWindow* window) {
     LuaBinding::Class<IWindow>(L, LuaBinding::MetatableOf<IWindow>::name)
@@ -815,30 +726,15 @@ void RegisterWindow(lua_State* L, IWindow* window) {
     lua_setglobal(L, "eWindow");
 }
 
-// =====================================================================
-// Renderer -- bare global DrawBody(body). Pulls transform/size/color/
-// shader off the RigidBody2D and forwards to DrawQuad, or -- if a
-// PixelSprite is attached -- flushes its pending edits and forwards to
-// DrawTexturedQuad instead. Needs both a Renderer2D* (to draw) and an
-// ActorRegistry* (to resolve the "Textured" named shader for sprite
-// bodies that never had an explicit shader set), so this bypasses
-// BindRawFunction/Table::RawWithContext -- both only support one
-// captured context pointer -- and pushes both closures by hand.
+// --- Renderer: DrawBody(body) forwards to DrawQuad, or to DrawTexturedQuad
+// when a sprite is attached. Needs both the renderer and the registry (to
+// resolve the "Textured" shader), so it is a hand-pushed two-upvalue closure.
 //
-// SyncCamera() -- resolves ActorRegistry's currently-active camera (see
-// GetActiveCamera()) and pushes it into the renderer for the rest of this
-// frame's world-space draws (including its targetAspect, the "Border"
-// named shader, and any attached border sprite -- see SetBorderSprite --
-// so the letterbox/pillarbox margins get whatever border effect is
-// currently loaded), or clears it if no camera is active. Call once per
-// frame from Lua (after any camera-follow update, before your Draw()
-// calls) -- deliberately NOT done automatically inside DrawBody() itself:
-// that would re-resolve the active camera on every single object drawn
-// (an O(n) ActorRegistry scan per DrawBody call, O(n^2) per frame) for a
-// value that only actually needs recomputing once a frame. Same
-// two-upvalue hand-rolled closure as Lua_DrawBody, for the same reason
-// (needs both a Renderer2D* and an ActorRegistry*).
-// =====================================================================
+// SyncCamera() resolves the active camera and pushes it, its targetAspect, the
+// "Border" shader and any border sprite into the renderer for the rest of the
+// frame's world draws. Call it once a frame, after camera-follow and before
+// drawing. Deliberately NOT folded into DrawBody(): that would re-run an O(n)
+// registry scan per object drawn, O(n^2) a frame, for a once-a-frame value. --
 
 int Lua_DrawBody(lua_State* L) {
     auto* body = LuaBinding::Value<RigidBody2D*>::Get(L, 1);
@@ -847,9 +743,8 @@ int Lua_DrawBody(lua_State* L) {
     if (!renderer) return 0;
 
     if (body->sprite) {
-        // Uploads any SetPixel/PunchCircle edits made earlier this frame
-        // before we draw, so a punch and its DrawBody() in the same
-        // Update() call show up in the same frame instead of one frame late.
+        // So a punch and its DrawBody() in the same Update() land in the same
+        // frame rather than one late.
         body->sprite->Flush();
         Shader* texShader = body->shader ? body->shader : (actors ? actors->GetOrCreateNamedShader("Textured") : nullptr);
         if (texShader) {
@@ -871,8 +766,7 @@ int Lua_SyncCamera(lua_State* L) {
     if (camBody && camBody->camera) {
         Shader* border = actors->GetOrCreateNamedShader("Border");
 
-        // Same "flush pending edits, then hand over the raw Texture*"
-        // shape Lua_DrawBody already uses for sprite-backed bodies above.
+        // Same flush-then-hand-over-the-Texture* shape as Lua_DrawBody.
         Texture* borderTexture = nullptr;
         if (PixelSprite* borderSprite = actors->GetBorderSprite()) {
             borderSprite->Flush();
@@ -902,11 +796,7 @@ void RegisterRenderer(lua_State* L, Renderer2D* renderer, ActorRegistry* actors)
     LuaBinding::BindFunction<&Renderer2D::GetPixelScale>(L, "GetPixelScale", renderer);
 }
 
-// =====================================================================
-// Actors -- table of ActorRegistry-wide queries and utilities.
-// GetNamedShader/LoadShaderFromFile/SetBorderSprite/GetBorderSprite are
-// all mechanical 1:1 method forwards; DumpTree too.
-// =====================================================================
+// --- Actors: registry-wide queries, all mechanical 1:1 method forwards. ---
 
 void RegisterActorRegistry(lua_State* L, ActorRegistry* actors) {
     LuaBinding::Table(L)
@@ -920,12 +810,9 @@ void RegisterActorRegistry(lua_State* L, ActorRegistry* actors) {
         .Finish("Actors");
 }
 
-// =====================================================================
-// Input -- table bound to a captured UserInputService*. Every Is*
-// query maps 1:1 onto a method call; GetMousePosition/
-// GetKeysPressedThisFrame return shapes (raw x,y / a Lua array table)
-// that don't match a mechanical single push, so they stay hand-written.
-// =====================================================================
+// --- Input: over a captured UserInputService*. The Is* queries map 1:1;
+// GetMousePosition and GetKeysPressedThisFrame return shapes a single push
+// can't express, so they stay hand-written. --------------------------------
 
 int Lua_InputGetMousePosition(lua_State* L) {
     auto* input = static_cast<UserInputService*>(lua_touserdata(L, lua_upvalueindex(1)));
@@ -935,9 +822,8 @@ int Lua_InputGetMousePosition(lua_State* L) {
     return 2;
 }
 
-// Input.GetKeysPressedThisFrame() -- returns an array table of every
-// keycode that went down this frame. Mainly for figuring out what a key's
-// raw code is on your machine: hold it and print the table's contents.
+// An array of every keycode that went down this frame -- mainly for finding a
+// key's raw code on your machine: hold it and print the table.
 int Lua_InputGetKeysPressedThisFrame(lua_State* L) {
     auto* input = static_cast<UserInputService*>(lua_touserdata(L, lua_upvalueindex(1)));
     lua_newtable(L);
@@ -962,22 +848,16 @@ void RegisterInput(lua_State* L, UserInputService* input) {
         .Function<&UserInputService::GetScrollDelta>("GetScrollDelta", input)
         .RawWithContext("GetMousePosition", input, &Lua_InputGetMousePosition)
         .RawWithContext("GetKeysPressedThisFrame", input, &Lua_InputGetKeysPressedThisFrame)
-        // Named constants so scripts can write Input.IsMouseButtonDown(Input.MouseLeft)
-        // instead of a magic number.
+        // So scripts write Input.MouseLeft rather than a magic number.
         .Constant("MouseLeft", static_cast<int>(MouseButton::Left))
         .Constant("MouseRight", static_cast<int>(MouseButton::Right))
         .Constant("MouseMiddle", static_cast<int>(MouseButton::Middle))
         .Finish("Input");
 }
 
-// =====================================================================
-// Physics -- gravity accessors plus the ground raycast. Gravity crosses
-// as two raw floats rather than a Vector2 (matches every other hot-path
-// Vector2-shaped getter here) and RigidBody2D::SetGravity/GetGravity are
-// static, so both stay plain functions; the raycast needs the
-// ActorRegistry, so it takes it as an upvalue the same way
-// RigidBody2D.new does.
-// =====================================================================
+// --- Physics: gravity accessors plus the ground raycast. Gravity crosses as
+// two raw floats and its accessors are static, so both stay plain functions;
+// the raycast takes the registry as an upvalue. ----------------------------
 
 int Lua_PhysicsSetGravity(lua_State* L) {
     float x = static_cast<float>(luaL_checknumber(L, 1));
@@ -1026,11 +906,8 @@ void RegisterPhysics(lua_State* L, ActorRegistry* actors) {
         .Finish("Physics");
 }
 
-// =====================================================================
-// IK -- stateless numeric kernels for objects/leg_rig.lua. No metatable,
-// no ownership, no context: every one of these is a pure function over
-// floats, so the whole table is plain lua_CFunctions.
-// =====================================================================
+// --- IK: stateless numeric kernels for objects/leg_rig.lua. No metatable, no
+// ownership -- every one is a pure function over floats. -------------------
 
 // IK.SolveTwoBone(hipX, hipY, ankleX, ankleY, L1, L2, side)
 //   -> kneeX, kneeY, ankleX, ankleY   (all whole texels)
@@ -1083,27 +960,17 @@ int Lua_IKApproach(lua_State* L) {
     return 1;
 }
 
-// -----------------------------------------------------------------------
-// IK.SolveLegFrame -- fuses the whole per-leg, per-frame WORLD-SPACE
-// solve that LegRig:UpdateLegs used to do as four separate boundary
-// crossings (IK.GaitPose, Physics.RaycastDown, two IK.Approach calls,
-// plus the surrounding Lua arithmetic) into one call. This is stage 1 of
-// the two-stage solve documented at the top of leg_rig.lua: continuous
-// world space, no texel rounding yet (stage 2 is still IK.SolveTwoBone,
-// called after weight distribution has settled the hip frame -- see
-// LegRig:SolveLeg -- and is left alone; it is already a single call).
+// IK.SolveLegFrame fuses the whole per-leg world-space solve -- GaitPose, the
+// ground raycast, two Approach calls and the arithmetic around them -- into one
+// crossing. Stage 1 of the two-stage solve at the top of leg_rig.lua:
+// continuous world space, no texel rounding yet (stage 2 is SolveTwoBone,
+// already a single call, run once weight distribution has settled the hips).
 //
-// Every persistent per-leg value (footX/Y, groundY, offX/Y, lastFacing,
-// lastMode) is threaded through as an explicit in/out pair rather than
-// held here, matching IK.Approach's own "no state, no ownership" shape --
-// Lua still owns the leg table, this just does one frame's arithmetic on
-// it in one crossing instead of four.
+// Every persistent per-leg value is threaded through as an explicit in/out
+// pair rather than held here -- Lua still owns the leg table.
 //
-// Mirrors scripts/objects/leg_rig.lua's old per-leg loop body operation
-// for operation (including left-to-right evaluation order on the
-// airborne targetY formula) so results are bit-identical to the
-// pre-fusion version. See scripts/api/IK.txt section 7 for the argument
-// reference.
+// Mirrors the old Lua loop body operation for operation, evaluation order
+// included, so results are bit-identical. See scripts/api/IK.txt section 7.
 //
 // Args (31): phase, stanceRatio, swingFrames,
 //            hipX, hipY, facing, amp,
@@ -1244,22 +1111,15 @@ int Lua_IKSolveLegFrame(lua_State* L) {
     return 14;
 }
 
-// -----------------------------------------------------------------------
-// IK.RasterizeHip -- fuses LegRig:RasterizeHip's per-column FillRect loop
-// (one boundary crossing per pixel-wide sheared column, up to hip.width
-// of them) into a single call. `legs` is the rig's own self.legs array;
-// each leg table must already carry this frame's `hipX` (authored,
-// forward-local) and `hipRow` (this frame's tilt-adjusted hip row) --
-// exactly the two fields LegRig:SolveLeg leaves on it. `hipColRows` is
-// self.hipColRows, keyed 0..hipWidth-1, exactly as BuildCanvases baked
-// it once at construction.
+// IK.RasterizeHip fuses the per-column FillRect loop -- one crossing per
+// pixel-wide sheared column -- into one call. Each leg table must already
+// carry this frame's `hipX` and `hipRow`, which SolveLeg leaves on it;
+// `hipColRows` is baked once at construction.
 //
-// Reproduces RasterizeHip's forward-local-then-mirror rule from
-// scripts/api/IK.txt section 13 exactly: centroid, slope, block edge and
-// each column's row are all computed (and rounded) in forward-local
-// space, and facing is applied only on the final FillRect x. Getting
-// that order wrong is what used to make the pelvis pop or grow
-// asymmetrically on a turn.
+// Reproduces the forward-local-then-mirror rule from IK.txt section 13
+// exactly: centroid, slope, block edge and each column's row are computed and
+// rounded in forward-local space, and facing is applied only to the final x.
+// Getting that order wrong is what made the pelvis pop asymmetrically on a turn.
 //
 // Args: sprite, legs, hipWidth, hipRear, hipRise, canvasW, leanX, facing,
 //       r, g, b, a, hipColRows

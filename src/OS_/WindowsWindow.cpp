@@ -16,10 +16,9 @@ static LRESULT CALLBACK WIndowProc(
 
             window = static_cast<WindowsWindow*>(cs->lpCreateParams);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(window));
-            // m_Hwnd is still null here (CreateWindowEx hasn't returned yet).
-            // Without this, HandleMessage forwards WM_NCCREATE to
-            // DefWindowProc(nullptr, ...), which returns FALSE and makes
-            // CreateWindowEx fail.
+            // m_Hwnd is still null here, since CreateWindowEx hasn't returned.
+            // Without this, HandleMessage sends WM_NCCREATE to
+            // DefWindowProc(nullptr, ...), which fails CreateWindowEx.
             window->SetNativeWindow(hwnd);
         } else {
             window = reinterpret_cast<WindowsWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
@@ -232,15 +231,10 @@ void WindowsWindow::SetIcon(const std::string& filepath) {
     SendMessage(m_Hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
 }
 
-// Borderless-fullscreen toggle (WS_POPUP sized to the monitor), not true
-// exclusive fullscreen -- simpler, no display-mode switch, and plays
-// nicer with alt-tab/multi-monitor setups, same trade-off most modern
-// engines make by default. SetWindowPos's SWP_FRAMECHANGED synchronously
-// pumps a WM_SIZE through the message loop, which already fires
-// WindowEvent::Type::Resize via HandleMessage() above -- so, same as the
-// Linux EWMH path, the camera/letterbox system picks up the new size with
-// no extra plumbing. UNVERIFIED -- no Windows box to test against, same
-// caveat already on WM_MOUSEWHEEL elsewhere in this file.
+// Borderless fullscreen (WS_POPUP sized to the monitor), not exclusive: no
+// display-mode switch, and it behaves better with alt-tab and multi-monitor.
+// SWP_FRAMECHANGED synchronously pumps a WM_SIZE, which already fires
+// WindowEvent::Type::Resize, so the camera picks up the new size for free.
 void WindowsWindow::SetFullscreen(bool fullscreen) {
     if (fullscreen == m_Fullscreen) return;
 

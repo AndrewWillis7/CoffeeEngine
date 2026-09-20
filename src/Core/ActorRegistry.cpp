@@ -13,25 +13,17 @@
 #include <iostream>
 
 ActorRegistry::ActorRegistry() {
-    // Register the engine's built-in named effects once, straight off
-    // disk. Add a new one by writing the GLSL under scripts/shaders/
-    // and adding one RegisterFromFile() line here.
+    // Built-in named effects. Add one by dropping GLSL under scripts/shaders/
+    // and adding a RegisterFromFile() line here.
     ShaderLibrary::RegisterFromFile("Glow", "scripts/shaders/glow.frag");
     ShaderLibrary::RegisterFromFile("RoundedPanel", "scripts/shaders/rounded_panel.frag");
     ShaderLibrary::RegisterFromFile("Textured", "scripts/shaders/textured.frag");
     ShaderLibrary::RegisterFromFile("Text", "scripts/shaders/text.frag");
     ShaderLibrary::RegisterFromFile("Border", "scripts/shaders/border.frag");
 
-    // "Border" (see Renderer2D::SetActiveCamera) gets sensible defaults up
-    // front, same spirit as CreateGlowShader() setting per-instance
-    // defaults right after construction -- so a script that never touches
-    // it still gets a good-looking night-sky letterbox instead of flat
-    // black (every uniform GLSL doesn't explicitly set defaults to zero,
-    // and a zeroed u_SkyColor/u_StarColor/u_CloudColor would just be
-    // solid black). Still fully Lua-tunable afterward via
-    // Actors.GetNamedShader("Border"):SetVec3(...). u_PixelScale is NOT
-    // set here -- Renderer2D::SetActiveCamera sets it fresh every frame,
-    // right before this shader is ever actually drawn.
+    // Seed "Border" so a script that never touches it still gets a night sky
+    // instead of the flat black that zero-initialised uniforms would give.
+    // u_PixelScale is deliberately omitted: SetActiveCamera sets it every frame.
     Shader* border = GetOrCreateNamedShader("Border");
     if (border && border->IsValid()) {
         border->SetVec3("u_SkyColor", 0.02f, 0.02f, 0.035f);
@@ -64,11 +56,8 @@ Shader* ActorRegistry::CreateShader(const std::string& vertexSrc, const std::str
 }
 
 Shader* ActorRegistry::CreateGlowShader() {
-    // Reuses whatever's already cached under the "Glow" named shader
-    // (registered from scripts/shaders/glow.frag in the constructor
-    // above) rather than reading the file a second time -- this just
-    // wants a SEPARATE Shader instance (its own uniform state) built
-    // from the same source, not the same cached instance.
+    // Reuses the registered "Glow" source rather than re-reading the file: the
+    // caller wants a separate instance with its own uniform state.
     const ShaderLibrary::Entry* entry = ShaderLibrary::Find("Glow");
     Shader* shader = entry
         ? CreateShader(entry->vertexSrc, entry->fragmentSrc)
@@ -99,7 +88,7 @@ Shader* ActorRegistry::GetOrCreateNamedShader(const std::string& name) {
 
     auto shader = std::make_unique<Shader>(entry->vertexSrc, entry->fragmentSrc);
     Shader* raw = shader.get();
-    m_NamedShaders[name] = std::move(shader);
+    m_NamedShaders.emplace(name, std::move(shader));
     return raw;
 }
 
@@ -112,23 +101,17 @@ bool ActorRegistry::LoadNamedShaderFromFile(const std::string& name, const std::
 
     auto shader = std::make_unique<Shader>(ShaderLibrary::SharedVertexSrc(), fragmentSrc);
     if (!shader->IsValid()) {
-        // Shader's own constructor already printed the GLSL compile/link
-        // error -- add just enough context here to say WHICH named slot
-        // and WHICH file it came from, then bail without touching
-        // whatever was already cached under `name` (still fully usable).
+        // Shader's constructor already printed the GLSL error; name the slot it
+        // came from, then leave the previously cached shader alone.
         std::cerr << "Engine Warning: shader '" << name << "' from '" << fragmentPath
                    << "' failed to compile -- keeping the previous shader (if any).\n";
         return false;
     }
 
-    // Keep ShaderLibrary's registry in sync too, so any future
-    // GetOrCreateNamedShader("Border")-style lookup that DOESN'T already
-    // have a cached instance (a fresh ActorRegistry, hypothetically) also
-    // sees this source rather than only whatever built-in was registered
-    // at startup.
+    // Keep the library in sync so a later uncached lookup sees this source too.
     ShaderLibrary::Register(name, fragmentSrc);
 
-    m_NamedShaders[name] = std::move(shader);
+    m_NamedShaders.insert_or_assign(name, std::move(shader));
     return true;
 }
 
@@ -181,16 +164,16 @@ PixelSprite* ActorRegistry::GetOrLoadPixelSprite(const std::string& filepath) {
     if (it != m_PixelSprites.end()) return it->second.get();
 
     auto sprite = std::make_unique<PixelSprite>(filepath);
-    if (!sprite->IsValid()) return nullptr; // PixelSprite's own constructor already logged why
+    if (!sprite->IsValid()) return nullptr; // PixelSprite's constructor logged why
 
     PixelSprite* raw = sprite.get();
-    m_PixelSprites[filepath] = std::move(sprite);
+    m_PixelSprites.emplace(filepath, std::move(sprite));
     return raw;
 }
 
 PixelSprite* ActorRegistry::CreateSolidSprite(int width, int height, float r, float g, float b, float a) {
     auto sprite = std::make_unique<PixelSprite>(width, height, Color(r, g, b, a));
-    if (!sprite->IsValid()) return nullptr; // PixelSprite's own constructor already logged why
+    if (!sprite->IsValid()) return nullptr; // PixelSprite's constructor logged why
 
     PixelSprite* raw = sprite.get();
     m_GeneratedSprites.push_back(std::move(sprite));
@@ -250,6 +233,7 @@ void ActorRegistry::DumpTree() const {
 
 std::vector<std::string> ActorRegistry::GetDebugLines() const {
     std::vector<std::string> lines;
+    lines.reserve(m_Bodies.size() * 2 + 2);
     lines.push_back(std::to_string(m_Bodies.size()) + " bodies");
 
     for (size_t i = 0; i < m_Bodies.size(); ++i) {
@@ -285,18 +269,8 @@ void ActorRegistry::Clear() {
     m_TerrainChunks.clear();
     m_GeneratedSprites.clear();
 
-    // m_BorderSprite is non-owning and MAY have pointed into
-    // m_GeneratedSprites (e.g. Actors.SetBorderSprite(Sprite.NewSolid(...)))
-    // just cleared above -- leaving it set would dangle into freed memory
-    // until a reloaded script calls SetBorderSprite() again (if it even
-    // does). A border built from Sprite.Load(...) instead lives in
-    // m_PixelSprites, which Clear() does NOT sweep (see its header
-    // comment) -- but there's no cheap way to tell here which pool a
-    // given pointer came from, so this always resets to null and relies
-    // on the fresh Init() that follows a reload to set it again if the
-    // script wants one. Same "hot-reload replays whatever Init() sets up"
-    // reasoning m_NamedShaders/m_PixelSprites already lean on elsewhere.
+    // Non-owning and may point into m_GeneratedSprites, just freed above. There is
+    // no cheap way to tell which pool it came from, so always drop it and let the
+    // reloaded script's Init() set it again.
     m_BorderSprite = nullptr;
-
-    // m_NamedShaders/m_PixelSprites intentionally NOT cleared -- see header comments.
 }

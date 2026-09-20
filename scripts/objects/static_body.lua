@@ -15,11 +15,8 @@ function StaticBody.new(x, y, w, h, r, g, b, a)
 
     self.body = RigidBody2D.new(x, y, w, h)
 
-    -- Solid-fill generated sprite instead of a flat-color quad -- every
-    -- basic square is pixel-addressable (SetPixel/PunchCircle/lighting)
-    -- by default now, not just PNG-backed props. SetSprite also sizes
-    -- the body to the sprite's native pixel size, which is exactly w x h
-    -- here, so this is a no-op on top of RigidBody2D.new(x, y, w, h).
+    -- A generated sprite rather than a flat quad, so every basic square is
+    -- pixel-addressable by default, not just PNG-backed props.
     self.sprite = Sprite.NewSolid(w, h, r or 1.0, g or 1.0, b or 1.0, a or 1.0)
     self.body:SetSprite(self.sprite)
 
@@ -33,12 +30,10 @@ function StaticBody:Draw()
     DrawBody(self.body)
 end
 
---- Resolves `body` out of this one, box-vs-box. Exists so a level can
---- keep ONE `solids` list containing both StaticBodys and Terrains and
---- let the mover call them all the same way -- terrain's surface is a
---- heightmap and resolves through a different path entirely (see
---- Terrain:ResolveAgainst), and nothing that walks around should have to
---- know which kind of ground it's standing on.
+--- Resolves `body` out of this one, box-vs-box. Exists so a level can keep ONE
+--- `solids` list of StaticBodys and Terrains and call them all the same way --
+--- terrain resolves as a heightmap through an entirely different path, and
+--- nothing that walks around should have to know which it is standing on.
 --- @param body userdata RigidBody2D to push out
 function StaticBody:ResolveAgainst(body)
     body:ResolveCollisionWith(self.body)

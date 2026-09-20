@@ -8,8 +8,7 @@
 #include <iostream>
 
 namespace {
-// Unit quad, centered on the origin -- the vertex shader scales this by
-// u_Size and rotates/translates it into world space.
+// Unit quad on the origin; the vertex shader scales, rotates and translates it.
 constexpr float kQuadVertices[] = {
     -0.5f, -0.5f,
      0.5f, -0.5f,
@@ -17,10 +16,8 @@ constexpr float kQuadVertices[] = {
     -0.5f,  0.5f,
 };
 
-// Largest rect of aspect targetW:targetH that fits inside a
-// containerW x containerH box, centered, via a single uniform scale
-// factor -- the "never stretch" guarantee: both axes always scale by
-// exactly the same amount, the smaller of the two possible fits.
+// Largest centred rect of aspect targetW:targetH fitting inside the container,
+// via a single uniform scale -- the never-stretch guarantee.
 struct FitRect { float x, y, w, h; };
 
 FitRect FitAspect(float containerW, float containerH, float targetW, float targetH) {
@@ -32,7 +29,7 @@ FitRect FitAspect(float containerW, float containerH, float targetW, float targe
     float h = targetH * scale;
     return FitRect{ (containerW - w) * 0.5f, (containerH - h) * 0.5f, w, h };
 }
-} // End Of Namespace
+} // namespace
 
 Renderer2D::Renderer2D() = default;
 
@@ -48,14 +45,12 @@ void Renderer2D::Init() {
     }
 
     GL::GenBuffers(1, &m_VBO);
+    // Bound once and left bound for the program's life: this is the only array
+    // buffer in the engine, so SubmitQuad never has to re-bind it.
     GL::BindBuffer(GL_ARRAY_BUFFER, m_VBO);
     GL::BufferData(GL_ARRAY_BUFFER, sizeof(kQuadVertices), kQuadVertices, GL_STATIC_DRAW);
-    GL::BindBuffer(GL_ARRAY_BUFFER, 0);
 
-    // The default shader used whenever a Draw call passes a null/invalid
-    // Shader* -- source lives at scripts/shaders/flat.frag, paired with
-    // the shared vertex stage every other shader in the engine uses too
-    // (see ShaderLibrary::SharedVertexSrc()).
+    // Used whenever a draw passes a null or invalid shader.
     std::string flatFragmentSrc;
     if (!ShaderLibrary::ReadFile("scripts/shaders/flat.frag", flatFragmentSrc)) {
         std::cerr << "Engine Fatal: Renderer2D couldn't open 'scripts/shaders/flat.frag'.\n";
@@ -76,7 +71,12 @@ void Renderer2D::Init() {
 
 void Renderer2D::Shutdown() {
     m_DefaultShader.reset();
+    if (m_ActiveAttrib >= 0) {
+        GL::DisableVertexAttribArray(static_cast<GLuint>(m_ActiveAttrib));
+        m_ActiveAttrib = -1;
+    }
     if (m_VBO) {
+        GL::BindBuffer(GL_ARRAY_BUFFER, 0);
         GL::DeleteBuffers(1, &m_VBO);
         m_VBO = 0;
     }
@@ -87,10 +87,8 @@ void Renderer2D::SetViewportSize(int width, int height) {
     m_Width = width > 0 ? static_cast<float>(width) : 1.0f;
     m_Height = height > 0 ? static_cast<float>(height) : 1.0f;
 
-    // Force a fresh glViewport(0,0,w,h) unconditionally, even if we happen
-    // to already be tracked as FullWindow -- the window itself just
-    // changed size, so the last actual glViewport call (whatever mode it
-    // was in) is stale regardless of what our cached mode says.
+    // Unconditional, even if already tracked as FullWindow: the window just
+    // changed size, so the last actual glViewport call is stale either way.
     glViewport(0, 0, width, height);
     m_ViewportMode = ViewportMode::FullWindow;
 }
@@ -120,21 +118,15 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
                                   Texture* borderTexture) {
     m_HasCamera = true;
     m_CameraPos = position;
-    // Guard against a zero/negative viewport (e.g. a Camera2D whose
-    // viewportSize was never set, or set wrong from Lua) -- the vertex
-    // shader divides by this, so a zero here would NaN out every
-    // world-space draw for the rest of the frame instead of just looking
-    // wrong for that one camera.
+    // The vertex shader divides by this, so a zero from an unset Camera2D would
+    // NaN out every world draw for the rest of the frame, not just this camera.
     m_CameraViewport = Vector2(
         viewportSize.x > 0.0f ? viewportSize.x : 1.0f,
         viewportSize.y > 0.0f ? viewportSize.y : 1.0f);
 
-    // Nested aspect-fit: first fit targetAspect (or, if unset, the
-    // camera's own viewportSize) into the real window; then fit
-    // viewportSize into THAT rect. When targetAspect is unset the two
-    // steps use the same aspect, so the second fit just fills the first
-    // rect exactly -- one clean formula covers both the "just fit to
-    // window" and "fit inside a specific on-screen shape" cases.
+    // Nested aspect-fit. With targetAspect unset both steps use the same aspect,
+    // so the second fit fills the first rect exactly -- one formula for both the
+    // "fit to window" and "fit inside a specific shape" cases.
     bool hasTargetAspect = targetAspect.x > 0.0f && targetAspect.y > 0.0f;
     Vector2 aspectBasis = hasTargetAspect ? targetAspect : m_CameraViewport;
 
@@ -146,24 +138,14 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
     m_ContentW = inner.w;
     m_ContentH = inner.h;
 
-    // Paint the border into whatever margin space the fit above leaves
-    // behind -- must happen on the FULL window viewport, before we shrink
-    // down to the content rect below, or it'd just paint over itself.
+    // Paint the border into the margins the fit leaves behind. Must happen on the
+    // FULL window viewport, before shrinking to the content rect below.
     if (borderShader && borderShader->IsValid()) {
-        // How many real screen pixels currently correspond to one
-        // native/virtual pixel -- lets a procedural border shader (see
-        // border.frag) quantize itself onto the SAME pixel grid the rest
-        // of the game's pixel art renders at, regardless of the real
-        // window's size. inner.w/m_CameraViewport.x and
-        // inner.h/m_CameraViewport.y are equal (FitAspect only ever
-        // applies a single uniform scale, never a non-uniform stretch),
-        // so either axis works here; x is used for a single scalar.
-        // Also folds in m_PixelScale (see SetPixelScale's header comment)
-        // so the border's own grid stays visually matched to however
-        // chunky the rest of the world currently is -- without this, the
-        // border's stars/clouds would keep rendering at the OLD
-        // (PixelScale == 1) grain even after a script chunks up every
-        // actor via SetPixelScale(), which would look inconsistent.
+        // Real screen pixels per native pixel, so a procedural border can quantize
+        // onto the same grid the rest of the pixel art uses at any window size.
+        // FitAspect only ever applies a uniform scale, so either axis works.
+        // m_PixelScale folds in too, or the border's stars and clouds would keep
+        // their old grain after a script chunks up the world.
         float pixelScale = (m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f) * m_PixelScale;
         borderShader->SetFloat("u_PixelScale", pixelScale);
 
@@ -185,10 +167,8 @@ void Renderer2D::ClearActiveCamera() {
 
 void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transform, const Vector2& size,
                                       const Color& color, bool world) const {
-    // Identity mapping -- world pixels line up 1:1 with screen pixels,
-    // origin at the window's center. This is both the "no camera set"
-    // fallback for world-space draws AND exactly what every screen-space
-    // (UI) draw always uses, so there's only one formula to keep correct.
+    // Identity mapping: world pixels 1:1 with screen pixels, origin at the window
+    // centre. Both the no-camera fallback and what every UI draw always uses.
     Vector2 cameraPos{m_Width * 0.5f, m_Height * 0.5f};
     Vector2 viewport{m_Width, m_Height};
 
@@ -197,22 +177,15 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
         viewport = m_CameraViewport;
     }
 
-    // Global chunky-pixel-art scale -- WORLD-space draws only (every
-    // actor), never screen-space (the debug UI stays crisp regardless).
-    // Shrinking the effective viewport packs the same real-pixel content
-    // rect with fewer world units, which makes each one draw bigger --
-    // see SetPixelScale()'s header comment for the full reasoning. A
-    // no-op at the default of 1.0.
+    // Shrinking the effective viewport packs the same content rect with fewer
+    // world units, so each draws bigger. World-space only; UI stays crisp.
     if (world && m_PixelScale != 1.0f) {
         viewport = viewport / m_PixelScale;
     }
 
-    // Real window size, pixels -- kept separate from u_ViewportSize (which
-    // drives the actual position math, see quad.vert) purely for fragment
-    // shaders that want real screen pixels regardless of camera/pixel-scale
-    // state, e.g. border.frag's star/cloud grid. This was never actually
-    // being set from C++ before, which silently zeroed border.frag's whole
-    // star/cloud layer (everything in it is derived from u_Resolution).
+    // Kept separate from u_ViewportSize (which drives the position math) for
+    // fragment shaders wanting real screen pixels regardless of camera or pixel
+    // scale -- border.frag's star and cloud grid, for instance.
     shader.SetVec2("u_Resolution", m_Width, m_Height);
 
     shader.SetFloat("u_Time", m_Time);
@@ -223,43 +196,31 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
     shader.SetVec2("u_CameraPos", cameraPos.x, cameraPos.y);
     shader.SetVec2("u_ViewportSize", viewport.x, viewport.y);
 
-    // On-grid pixel snapping: world-space game-object draws (DrawQuad/
-    // DrawTexturedQuad) snap their center to the nearest whole native
-    // pixel so the pixel art stays crisp as the camera smoothly follows
-    // the player (Camera2D::Follow's exponential lerp lands on a
-    // fractional position most frames) -- without this, sprites
-    // shimmer/blur by fractions of a pixel as the camera eases toward
-    // its target. Screen-space draws (DrawScreenQuad/
-    // DrawScreenTexturedQuad -- the debug UI panel AND the full-window
-    // border background) deliberately do NOT snap here: UI shouldn't be
-    // forced onto the game's pixel grid, and the border achieves its own
-    // on-grid look through a different mechanism entirely (see
-    // border.frag's u_PixelScale), since it's one static full-window
-    // quad, not a moving sprite.
+    // World draws snap their centre to a whole native pixel, so the art stays
+    // crisp while Camera2D::Follow's lerp sits on a fractional position; without
+    // it sprites shimmer as the camera eases. Screen draws deliberately don't --
+    // UI shouldn't be forced onto the game's grid, and the border gets its own
+    // on-grid look from u_PixelScale instead.
     shader.SetFloat("u_PixelSnap", world ? 1.0f : 0.0f);
 }
 
 void Renderer2D::SubmitQuad(Shader& active) {
-    GL::BindBuffer(GL_ARRAY_BUFFER, m_VBO);
-
-    // Goes through Shader::GetAttribLocation's own cache (see Shader.h)
-    // instead of calling GL::GetAttribLocation directly -- this runs once
-    // per quad, and re-querying the driver by name every single draw call
-    // is exactly the kind of redundant round-trip that cache exists to
-    // avoid (some drivers implicitly sync on this call).
+    // Through Shader's own cache, not GL::GetAttribLocation -- this runs once per
+    // quad, and some drivers implicitly sync on a by-name query.
     GLint posAttrib = active.GetAttribLocation("a_LocalPos");
-    if (posAttrib >= 0) {
+    if (posAttrib < 0) return;
+
+    // The VBO stays bound from Init(), and every shader here uses the same vertex
+    // layout, so the attrib only needs re-pointing when its index changes --
+    // which in practice means once, on the first draw.
+    if (posAttrib != m_ActiveAttrib) {
+        if (m_ActiveAttrib >= 0) GL::DisableVertexAttribArray(static_cast<GLuint>(m_ActiveAttrib));
         GL::EnableVertexAttribArray(static_cast<GLuint>(posAttrib));
         GL::VertexAttribPointer(static_cast<GLuint>(posAttrib), 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+        m_ActiveAttrib = posAttrib;
     }
 
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-
-    if (posAttrib >= 0) {
-        GL::DisableVertexAttribArray(static_cast<GLuint>(posAttrib));
-    }
-
-    GL::BindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader) {
@@ -270,11 +231,8 @@ void Renderer2D::DrawQuad(const Transform2D& transform, const Vector2& size, con
     Shader* active = (shader && shader->IsValid()) ? shader : m_DefaultShader.get();
     if (!active || !active->IsValid()) return;
 
-    // transform.scale is a per-object multiplier on top of `size` (and the
-    // shader's own overdrawScale) -- e.g. Vector2(2,2) draws twice as big
-    // without touching the object's logical/collision size. Defaults to
-    // Vector2::One() (see Transform2D.h), so this is a no-op for every
-    // existing caller that's never touched .scale.
+    // transform.scale multiplies `size` and the shader's overdrawScale, drawing
+    // bigger without touching the object's logical/collision size.
     Vector2 drawSize = size * active->overdrawScale * transform.scale;
 
     active->Bind();

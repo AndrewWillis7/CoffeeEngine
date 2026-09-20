@@ -72,13 +72,9 @@ private:
 
     bool m_ShouldClose = false;
 
-    // Fullscreen state -- plain ints/long instead of RECT/LONG so this
-    // header doesn't need <windows.h> (same forward-declaration
-    // discipline as m_Hwnd/m_Instance above). SetFullscreen() saves the
-    // windowed placement here before going fullscreen, so turning
-    // fullscreen back off restores the exact previous size/position
-    // instead of guessing. UNVERIFIED -- no Windows box to test against,
-    // same caveat as WM_MOUSEWHEEL below.
+    // Plain ints rather than RECT/LONG, so this header doesn't need
+    // <windows.h> -- the same discipline as m_Hwnd above. SetFullscreen() saves
+    // the windowed placement here so leaving fullscreen restores it exactly.
     bool m_Fullscreen = false;
     long m_WindowedStyle = 0;
     int m_WindowedX = 0, m_WindowedY = 0, m_WindowedW = 0, m_WindowedH = 0;

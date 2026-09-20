@@ -3,26 +3,17 @@
 #include "../../IWindow.h" // WindowEvent, MouseButton
 #include <unordered_set>
 
-// Polling-style input state, fed by IWindow's raw event callback. Wire it up
-// in main.cpp:
-//
-//   window->SetEventCallback([&](const WindowEvent& e){
-//       inputService.OnWindowEvent(e);
-//       // ...whatever else main.cpp already does with Close/Resize...
-//   });
-//
-// and call inputService.NewFrame() once per loop iteration, after
-// window->PollEvents()/ScriptEngine::Update have both run, so *Pressed and
-// *Released only report true for the single frame the transition happened.
+// Polling-style input state, fed by IWindow's raw event callback. main.cpp
+// forwards every event into OnWindowEvent() and calls NewFrame() once per loop,
+// after PollEvents() and ScriptEngine::Update() have both run, so *Pressed and
+// *Released only report true on the frame the transition happened.
 class UserInputService {
 public:
     void OnWindowEvent(const WindowEvent& event);
     void NewFrame();
 
-    // Keycodes are the RAW platform code (X11 keycode on Linux, virtual-key
-    // code on Windows) -- there's no cross-platform key-name table yet, same
-    // as the pre-existing WindowEvent::KeyPressed. Worth revisiting once we
-    // want Lua scripts to say Input.IsKeyDown("W") instead of a magic number.
+    // Raw platform codes: X11 keycodes on Linux, virtual-key codes on Windows.
+    // There is no cross-platform name table yet.
     bool IsKeyDown(int keycode) const;
     bool IsKeyPressed(int keycode) const;
     bool IsKeyReleased(int keycode) const;
@@ -35,9 +26,8 @@ public:
 
     Vector2 GetMousePosition() const { return m_MousePosition; }
 
-    // Every keycode that went down on THIS frame. Mainly a debugging aid --
-    // e.g. print these to find out what keycode "W" actually is on your
-    // keyboard/platform, since there's no name->keycode table yet.
+    // Every keycode that went down this frame -- mainly a debugging aid for
+    // finding what a key's raw code is on your platform.
     const std::unordered_set<int>& GetKeysPressedThisFrame() const { return m_KeysPressedThisFrame; }
 
 private:

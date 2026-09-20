@@ -2,9 +2,8 @@
 #include <string>
 #include <unordered_map>
 
-// Thin Wrapper around a compiled+linked GLSL program
-// Owns the GL Program object for its lifetime
-// Instances are created and owned by an actor registry
+// Thin wrapper around a compiled and linked GLSL program, owning the GL program
+// object for its lifetime. Instances are created and owned by ActorRegistry.
 
 class Shader {
 public:
@@ -28,7 +27,7 @@ public:
     void SetInt(const std::string& name, int value);
     int GetAttribLocation(const std::string& name);
 
-    // Sets how much bigger than the RigidBody2D's logical size to fraw the quad
+    // How much bigger than the body's logical size to draw the quad.
     float overdrawScale = 1.0f;
 
 private:

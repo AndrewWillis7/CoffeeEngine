@@ -1,28 +1,16 @@
--- Wraps a RigidBody2D + PixelSprite + TerrainChunk as a single placeable
--- game object, same pattern Campfire/Camera/Player already use for their
--- own body + config pairs.
+-- A RigidBody2D plus a PixelSprite plus a TerrainChunk, as one placeable actor.
+-- There is no "the floor" in this engine: place as many of these as you like,
+-- any size, any seed, each generating and animating independently. That is why
+-- terrain is a Lua class over a C++ config object rather than engine furniture.
 --
--- A Terrain is just an actor. There is no "the floor" anywhere in the
--- engine -- place as many of these as you like, anywhere, at any size,
--- with any seed; each one generates and animates independently. That's
--- the whole reason terrain is a Lua class over a C++ config object rather
--- than something the engine sets up for you.
---
--- WHAT IT IS UNDERNEATH
---   self.body   -- the actor. Position is the chunk's CENTER, size its
---                  texel dimensions (SetSprite derives that from the
---                  sprite, so w/h here is the single source of truth).
---   self.sprite -- a blank transparent PixelSprite the chunk paints into.
---                  Because it's a normal PixelSprite, terrain is lit
---                  per-pixel by LightingSystem for free, and
+--   self.body   -- the actor; position is the chunk's CENTRE, size its texels.
+--   self.sprite -- a blank transparent canvas the chunk paints into. Being an
+--                  ordinary PixelSprite, it is lit per-pixel for free and
 --                  PunchCircle-able the day destruction lands.
---   self.chunk  -- the TerrainChunk: generation config + the heightmap
---                  and grass simulation.
+--   self.chunk  -- generation config, heightmap and grass simulation.
 --
--- COLLISION
--- Deliberately NO CollisionShape2D. An uneven surface isn't a box, so
--- terrain resolves collision against its own heightmap instead -- see
--- Terrain:ResolveAgainst below and TerrainChunk.h's header comment.
+-- Deliberately NO CollisionShape2D: an uneven surface isn't a box, so terrain
+-- resolves against its own heightmap instead.
 
 local Class = require("core.Class")
 
@@ -31,12 +19,10 @@ local Terrain = Class()
 --- @param x number World X of the chunk's CENTER
 --- @param y number World Y of the chunk's CENTER
 --- @param w number Width in texels
---- @param h number Height in texels. Must be tall enough for the dirt AND
----   the grass above it -- the chunk needs surfaceAmplitude +
----   grassMaxHeight + 1 texels of headroom above its mean surface, and
----   will warn and clamp if `opts.surfaceOffset` doesn't leave that room.
---- @param opts table|nil Optional overrides, all matching TerrainChunk's
----   own field names (see scripts/api/coffee_api.lua for the full list).
+--- @param h number Height in texels. Must fit the dirt AND the grass above it:
+---   the chunk needs surfaceAmplitude + grassMaxHeight + 1 texels of headroom
+---   over its mean surface, and warns and clamps if surfaceOffset doesn't.
+--- @param opts table|nil Overrides matching TerrainChunk's own field names.
 function Terrain.new(x, y, w, h, opts)
     opts = opts or {}
 
@@ -44,18 +30,14 @@ function Terrain.new(x, y, w, h, opts)
 
     self.body = RigidBody2D.new(x, y, w, h)
 
-    -- Fully transparent canvas -- Generate() writes every pixel, dirt and
-    -- sky alike, so nothing here is left to chance. Alpha 0 is what makes
-    -- the area above the surface genuinely empty rather than black:
-    -- PixelSprite::IsSolid is alpha-based, so transparent sky is also
-    -- invisible to lighting and (eventually) to destruction queries.
+    -- Generate() writes every pixel, dirt and sky alike. Alpha 0 is what makes
+    -- the area above the surface genuinely empty rather than black -- IsSolid is
+    -- alpha-based, so transparent sky is invisible to lighting too.
     self.sprite = Sprite.NewSolid(w, h, 0.0, 0.0, 0.0, 0.0)
     self.body:SetSprite(self.sprite)
 
-    -- Immovable, same convention as StaticBody -- terrain never
-    -- integrates and never gets pushed. TerrainSystem also uses mass <= 0
-    -- to decide a body can't part grass, so this keeps the ground from
-    -- flattening its own vegetation.
+    -- Immovable, same convention as StaticBody. TerrainSystem also reads
+    -- mass <= 0 as "can't part grass", so the ground won't flatten its own.
     self.body:SetMass(0)
 
     self.chunk = TerrainChunk.new()
@@ -88,37 +70,32 @@ function Terrain.new(x, y, w, h, opts)
     -- Collision
     if opts.maxStepHeight then self.chunk:SetMaxStepHeight(opts.maxStepHeight) end
 
-    -- Everything above has to be set BEFORE this -- Generate() bakes the
-    -- config into a heightmap, a pixel fill and a blade list, and changing
-    -- a field afterward does nothing until the next Generate() call.
+    -- Everything above must be set BEFORE this: Generate() bakes the config into
+    -- a heightmap, a fill and a blade list, and later changes do nothing until
+    -- the next Generate().
     self.chunk:Generate(self.sprite)
 
-    -- Tag the body last, so TerrainSystem can never see a half-configured
-    -- chunk if this ever moves off the main thread.
+    -- Tagged last, so TerrainSystem can never see a half-configured chunk.
     self.body:SetTerrain(self.chunk)
 
-    -- Off by default, matching the old flat floor. Turn it on and the
-    -- ground casts real hard shadows -- a campfire sitting on the surface
-    -- then lights the grass and the top layer of dirt but not the rock
-    -- below it, which looks great and costs an occlusion test per light
-    -- ray (see RigidBody2D::lightBlocking).
+    -- Off by default. On, the ground casts hard shadows: a campfire on the
+    -- surface lights the grass and topsoil but not the rock below, at the cost
+    -- of an occlusion test per light ray.
     if opts.lightBlocking then self.body:SetLightBlocking(true) end
 
     return self
 end
 
---- Resolves `body` against this chunk's heightmap. Named to match the
---- same method on StaticBody so a level can put both in one `solids`
---- list and let Player:Update call them the same way, without the player
---- needing to know that one of them is a box and the other is a surface.
+--- Resolves `body` against this chunk's heightmap. Named to match StaticBody's
+--- so a level can keep both in one `solids` list and call them identically,
+--- without the mover knowing which is a box and which a surface.
 --- @param body userdata RigidBody2D to push out of the ground
 function Terrain:ResolveAgainst(body)
     self.chunk:ResolveBody(body, self.body)
 end
 
---- World Y of the ground surface directly under `worldX`. The way to
---- place anything ON the terrain without hand-tuning a Y: an object of
---- height h sits centered at (terrain:SurfaceYAt(x) - h / 2).
+--- World Y of the surface under `worldX`. The way to place anything on terrain
+--- without hand-tuning: an object of height h centres at SurfaceYAt(x) - h / 2.
 --- @param worldX number
 --- @return number worldY
 function Terrain:SurfaceYAt(worldX)
