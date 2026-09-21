@@ -134,6 +134,28 @@ function RigidBody2D:SetName(name) end
 ---@return boolean
 function RigidBody2D:IsPlayer() end
 
+--- Marks this body as drawn on `owner`'s behalf (a leg canvas, a coat). Editor
+--- only: clicking it in the scene editor selects the owner, and its own
+--- transform shows as locked, since the owner's script places it every frame.
+---@param owner RigidBody2D|nil nil clears it
+function RigidBody2D:SetPartOf(owner) end
+---@return RigidBody2D|nil
+function RigidBody2D:GetPartOf() end
+
+--- Offers `tbl[key]` to the scene editor's inspector under `name`, listed on
+--- this body. Edits are written straight into the table, undone like any
+--- other field, and saved as `script.<name>` in the .scene file, which lays
+--- them back over the table after every Init(). A boolean there becomes a
+--- toggle; a number a drag field. A prefix before the first '.' ("gait.") is
+--- shown as a sub-heading. Exposing a name again replaces it.
+---@param name string e.g. "gait.stride"
+---@param tbl table
+---@param key string
+---@param opts? { min: number?, max: number?, step: number?, decimals: integer?, integer: boolean?, onChange: fun(tbl: table)? }
+--- onChange runs after every edit, for a value baked into something that
+--- has to be rebuilt when it changes.
+function RigidBody2D:Expose(name, tbl, key, opts) end
+
 ---@return PixelSprite|nil
 function RigidBody2D:GetSprite() end
 ---@param sprite PixelSprite|nil Also resets draw size to the sprite's native pixel size
@@ -734,6 +756,13 @@ function Physics.GetGravity() end
 ---@field W integer
 ---@field A integer
 ---@field S integer
+---@field Q integer
+---@field E integer
+---@field R integer
+---@field Y integer
+---@field F integer
+---@field Z integer
+---@field C integer
 ---@field D integer
 ---@field Up integer
 ---@field Down integer

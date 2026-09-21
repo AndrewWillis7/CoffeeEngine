@@ -18,7 +18,7 @@ GroundHit RaycastDown(const ActorRegistry& actors,
 
     for (const auto& owned : actors.GetBodies()) {
         const RigidBody2D* body = owned.get();
-        if (!body || body == ignore || !body->raycastTarget) continue;
+        if (!body || body == ignore || !body->raycastTarget || body->destroyed) continue;
         if (!body->terrain && !body->collisionShape) continue;
 
         const float halfW = body->size.x * 0.5f;

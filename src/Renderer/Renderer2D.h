@@ -50,6 +50,32 @@ public:
     // origin top-left. Also restores the full-window GL viewport.
     void ClearActiveCamera();
 
+    // Free look for the scene editor. While set, SetActiveCamera keeps the
+    // camera's framing -- aspect, letterbox, border -- but centres on
+    // `position` and shows `zoom` times as much world (0.5 = twice as close).
+    // Game code keeps driving its own camera body underneath, untouched, so
+    // clearing it lands straight back on wherever the game's camera is by then.
+    void SetViewOverride(const Vector2& position, float zoom);
+    void ClearViewOverride() { m_HasViewOverride = false; }
+    bool HasViewOverride() const { return m_HasViewOverride; }
+
+    // Screen <-> world through the mapping world draws used most recently: the
+    // active camera if one was set, else the identity. Screen space is real
+    // window pixels with a top-left origin, which is what UserInputService
+    // reports, so a cursor maps straight onto the world it is pointing at.
+    Vector2 ScreenToWorld(const Vector2& screen) const;
+    Vector2 WorldToScreen(const Vector2& world) const;
+
+    // Real window pixels one world unit spans. Every fit here is uniform, so
+    // one number covers both axes.
+    float PixelsPerWorldUnit() const;
+
+    // Centre of the most recent world mapping, override included.
+    Vector2 GetViewCenter() const;
+
+    // The real window, in pixels, as last given to SetViewportSize.
+    Vector2 GetScreenSize() const { return {m_Width, m_Height}; }
+
     // World-space: mapped through the active camera if there is one, otherwise
     // the identity mapping, so a script that never makes a camera draws as before.
     void DrawQuad(const Transform2D& transform, const Vector2& size, const Color& color, Shader* shader);
@@ -132,6 +158,15 @@ private:
     bool m_HasCamera = false;
     Vector2 m_CameraPos;
     Vector2 m_CameraViewport;
+
+    bool m_HasViewOverride = false;
+    Vector2 m_ViewOverridePos;
+    float m_ViewOverrideZoom = 1.0f;
+
+    // m_CameraViewport with the pixel-scale divisor applied, i.e. the world
+    // units the content rect actually spans. Shared by the draw uniforms and
+    // the screen <-> world mapping so the two can never disagree.
+    Vector2 EffectiveWorldViewport() const;
 
     // The camera's content rect in real window pixels, top-left origin.
     // Centred letterboxing makes the top and bottom margins equal, so GL's

@@ -12,6 +12,7 @@ class PixelSprite;
 class Camera2D;
 class LightEmitterConfig;
 class TerrainChunk;
+class DebugQuadConfig;
 
 // Sole owner of every engine-side object Lua can create at runtime. Lua holds
 // raw pointers into these pools, never memory of its own.
@@ -49,6 +50,13 @@ public:
     LightEmitterConfig* CreateLightEmitter();
     TerrainChunk* CreateTerrainChunk();
 
+    // A placed "debug quad" asset (see DebugQuadConfig): a 1x1-cell body with a
+    // procedurally generated grid texture, ready to be named and edited by the
+    // scene editor. Exposed to Lua as Actors.CreateDebugQuad so the per-frame
+    // DrawBody() a spawned asset needs can come from the Lua-side registry that
+    // calls it, the same as any other visible object.
+    RigidBody2D* CreateDebugQuad(float x, float y);
+
     // Non-owning; the sprite belongs to whichever pool created it. Drawn behind
     // the letterbox margins when the active "Border" shader wants a texture.
     void SetBorderSprite(PixelSprite* sprite) { m_BorderSprite = sprite; }
@@ -68,6 +76,7 @@ public:
     size_t GetCameraCount() const { return m_Cameras.size(); }
     size_t GetLightEmitterCount() const { return m_LightEmitters.size(); }
     size_t GetTerrainChunkCount() const { return m_TerrainChunks.size(); }
+    size_t GetDebugQuadCount() const { return m_DebugQuads.size(); }
     size_t GetShaderCount() const { return m_Shaders.size() + m_NamedShaders.size(); }
     size_t GetSpriteCount() const { return m_PixelSprites.size() + m_GeneratedSprites.size(); }
 
@@ -86,6 +95,7 @@ private:
     std::vector<std::unique_ptr<Camera2D>> m_Cameras;
     std::vector<std::unique_ptr<LightEmitterConfig>> m_LightEmitters;
     std::vector<std::unique_ptr<TerrainChunk>> m_TerrainChunks;
+    std::vector<std::unique_ptr<DebugQuadConfig>> m_DebugQuads;
     std::vector<std::unique_ptr<Shader>> m_Shaders;
 
     // Not swept by Clear(): expensive-to-build engine assets (compiled GLSL,

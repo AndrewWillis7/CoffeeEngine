@@ -2,6 +2,7 @@
 #include "DebugOverlay.h"
 #include "FrameStats.h"
 #include "SceneExplorer.h"
+#include "Core/Engine/SceneEditor.h"
 #include <memory>
 
 class ActorRegistry;
@@ -44,7 +45,14 @@ public:
     bool WantsMouse() const;
 
 private:
+    // Right-docked, shown only while the scene editor is active: buttons that
+    // arm SceneEditor::ArmPlacement() for the next world click. A separate
+    // UIPanel rather than a section of m_Panel, so it stays pinned to the
+    // opposite edge regardless of what the left panel is scrolled to.
+    void DrawAssetMenu(int windowWidth, int windowHeight);
+
     void SectionPerformance(UIPanel& panel);
+    void SectionEditor(UIPanel& panel);
     void SectionExplorer(UIPanel& panel);
     void SectionInspector(UIPanel& panel);
     void SectionTime(UIPanel& panel);
@@ -65,9 +73,14 @@ private:
     const TerrainSystem& m_Terrain;
 
     std::unique_ptr<UIPanel> m_Panel;
+    std::unique_ptr<UIPanel> m_AssetMenu;
     SceneExplorer m_Explorer;
     DebugOverlay m_Overlay;
     FrameStats m_Stats;
+
+    // Declared after m_Explorer, whose selection it shares: built after it and
+    // torn down before it.
+    SceneEditor m_Editor;
 
     // Resolved once from KeyMap; 0 means the table had no entry and the
     // shortcut is simply inert rather than firing on keycode 0.
@@ -78,6 +91,7 @@ private:
         int step = 0;
         int overlays = 0;
         int uiScale = 0;
+        int editor = 0;
     } m_Keys;
 
     bool m_Open = false;
@@ -93,6 +107,7 @@ private:
     bool m_ReloadRequested = false;
 
     bool m_ShowPerformance = true;
+    bool m_ShowEditor = true;
     bool m_ShowExplorer = true;
     bool m_ShowInspector = true;
     bool m_ShowTime = false;

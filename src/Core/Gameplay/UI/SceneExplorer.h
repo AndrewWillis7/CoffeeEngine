@@ -41,6 +41,10 @@ public:
     RigidBody2D* Selected(const ActorRegistry& actors) const;
     void ClearSelection() { m_Selected = nullptr; }
 
+    // For picking from outside the tree -- the scene editor's click in the
+    // world -- so both views always agree on what is selected.
+    void Select(RigidBody2D* body) { m_Selected = body; }
+
     bool* KindFilter(Kind kind) { return &m_ShowKind[static_cast<int>(kind)]; }
     bool* GroupedFlag() { return &m_Grouped; }
 

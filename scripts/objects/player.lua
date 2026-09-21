@@ -11,6 +11,13 @@ function Player.new(x, y, w, h, legConfig, torsoConfig)
     local self = Character.new(x, y, w, h, legConfig, torsoConfig)
     setmetatable(self, Player)
     self.body:SetName("Player")
+
+    -- Multipliers on the config's walk speed. Held per player rather than as
+    -- literals in HandleInput so the scene editor can tune them alongside it.
+    self.sprintSpeed = 2.2
+    self.crouchSpeed = 0.5
+    self.body:Expose("speed.sprint", self, "sprintSpeed", { min = 1, max = 6, step = 0.01 })
+    self.body:Expose("speed.crouch", self, "crouchSpeed", { min = 0.05, max = 1, step = 0.005 })
     return self
 end
 
@@ -31,7 +38,7 @@ function Player:HandleInput()
     -- higher steps, crouching shorter ones with sunken hips.
     self:SetGaitState(crouching and "crouch" or (sprinting and "sprint" or "walk"))
 
-    local speedScale = crouching and 0.5 or (sprinting and 2.2 or 1.0)
+    local speedScale = crouching and self.crouchSpeed or (sprinting and self.sprintSpeed or 1.0)
     local speed = self.config:GetMoveSpeed() * speedScale
 
     local _, vy = self.body:GetVelocity()

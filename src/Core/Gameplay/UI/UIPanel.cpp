@@ -22,8 +22,8 @@ constexpr Color kZebra{1.0f, 1.0f, 1.0f, 0.022f};
 
 } // namespace
 
-UIPanel::UIPanel(ActorRegistry& actors, Renderer2D& renderer, UserInputService& input)
-    : m_Actors(actors), m_Renderer(renderer), m_Input(input), m_Font(std::make_unique<Font>()) {}
+UIPanel::UIPanel(ActorRegistry& actors, Renderer2D& renderer, UserInputService& input, Anchor anchor)
+    : m_Actors(actors), m_Renderer(renderer), m_Input(input), m_Font(std::make_unique<Font>()), m_Anchor(anchor) {}
 
 UIPanel::~UIPanel() = default;
 
@@ -53,11 +53,12 @@ void UIPanel::NewFrame(int windowWidth, int windowHeight) {
     m_Images.clear();
     m_TitleFlats = 0;
     m_TitleGlyphs = 0;
+    m_Tooltip.clear();
 
     m_WindowWidth = windowWidth;
     m_WindowHeight = windowHeight;
 
-    m_X = S(kMargin);
+    m_X = m_Anchor == Anchor::Right ? static_cast<float>(windowWidth) - m_Width - S(kMargin) : S(kMargin);
     m_Y = S(kMargin);
     m_Height = std::max(static_cast<float>(windowHeight) - 2.0f * S(kMargin), S(kTitleH) + RowHeight());
 
@@ -363,6 +364,70 @@ bool UIPanel::SliderInt(const std::string& label, int* value, int minValue, int 
     return true;
 }
 
+bool UIPanel::DragFloat(const std::string& label, float* value, float speed, int decimals,
+                        float width, float minValue, float maxValue, const Color& labelColor) {
+    const int id = ++m_WidgetCounter;
+    Vector2 size;
+    Vector2 pos = Place(width, RowHeight() + S(4.0f), size);
+
+    const bool hovered = Hover(pos, size);
+    if (hovered && m_MousePressed) {
+        m_ActiveId = id;
+        m_DragAnchorX = m_Mouse.x;
+        m_DragStartValue = *value;
+    }
+    const bool active = m_ActiveId == id && m_MouseDown;
+
+    bool changed = false;
+    // A press that never moves must not count as an edit, or merely clicking a
+    // field would round its value and report it changed.
+    const float travel = m_Mouse.x - m_DragAnchorX;
+    if (active && std::fabs(travel) >= 1.0f) {
+        const float step = std::pow(10.0f, static_cast<float>(-decimals));
+        float next = std::round((m_DragStartValue + travel * speed) / step) * step;
+        if (minValue < maxValue) next = std::clamp(next, minValue, maxValue);
+        if (next != *value) {
+            *value = next;
+            changed = true;
+        }
+    }
+
+    if (Visible(pos.y, size.y)) {
+        const Color fill = active ? UITheme::RowSelected : hovered ? UITheme::RowHover : UITheme::TrackBg;
+        PushRounded(pos, size, fill, (hovered || active) ? UITheme::Accent : UITheme::PanelBorder,
+                    S(1.0f), S(3.0f));
+
+        const float textY = pos.y + (size.y - Glyph()) * 0.5f;
+        const std::string valueText = FormatFloat(*value, decimals);
+        const float valueWidth = static_cast<float>(valueText.size() + 1) * Advance();
+        PushText(label, {pos.x + S(4.0f), textY}, (hovered || active) ? UITheme::Text : labelColor,
+                 pos.x + size.x - valueWidth);
+        PushTextRight(valueText, pos.x + size.x - S(4.0f), textY, active ? UITheme::Accent : UITheme::Value,
+                      pos.x + S(4.0f));
+    }
+    return changed;
+}
+
+void UIPanel::LockedField(const std::string& label, const std::string& value, const std::string& reason,
+                          float width) {
+    Vector2 size;
+    Vector2 pos = Place(width, RowHeight() + S(4.0f), size);
+
+    const bool hovered = Hover(pos, size);
+    if (hovered && !reason.empty()) Tooltip(reason);
+    if (!Visible(pos.y, size.y)) return;
+
+    PushRounded(pos, size, UITheme::SectionBg, hovered ? UITheme::AccentDim : UITheme::Guide, S(1.0f), S(3.0f));
+
+    const float textY = pos.y + (size.y - Glyph()) * 0.5f;
+    const float valueWidth = static_cast<float>(value.size() + 1) * Advance();
+    PushText(std::string(1, kLockGlyph), {pos.x + S(4.0f), textY}, UITheme::TextDim, pos.x + size.x);
+    PushText(label, {pos.x + S(4.0f) + Advance() * 1.5f, textY}, UITheme::TextFaint,
+             pos.x + size.x - valueWidth);
+    PushTextRight(value, pos.x + size.x - S(4.0f), textY, UITheme::TextDim,
+                  pos.x + S(4.0f) + Advance() * 1.5f);
+}
+
 bool UIPanel::Header(const std::string& label, bool* open, const std::string& right) {
     Vector2 size;
     Vector2 pos = Place(0.0f, RowHeight() + S(5.0f), size);
@@ -548,17 +613,75 @@ void UIPanel::Draw() {
     glDisable(GL_SCISSOR_TEST);
 
     const float maxScroll = std::max(0.0f, m_LastContentHeight - m_ContentH);
-    if (maxScroll <= 0.0f) return;
+    if (maxScroll > 0.0f) {
+        const float barX = ContentRight() + S(2.0f);
+        const float handle = std::max(m_ContentH * (m_ContentH / m_LastContentHeight), S(20.0f));
+        const float handleY = m_ContentTop + (m_Scroll / maxScroll) * (m_ContentH - handle);
 
-    const float barX = ContentRight() + S(2.0f);
-    const float handle = std::max(m_ContentH * (m_ContentH / m_LastContentHeight), S(20.0f));
-    const float handleY = m_ContentTop + (m_Scroll / maxScroll) * (m_ContentH - handle);
+        Renderer2D::ScreenQuad bar[2] = {
+            {{barX + S(kScrollBarW) * 0.5f, m_ContentTop + m_ContentH * 0.5f}, {S(kScrollBarW), m_ContentH},
+             UITheme::TrackBg, {0.0f, 0.0f}, {1.0f, 1.0f}},
+            {{barX + S(kScrollBarW) * 0.5f, handleY + handle * 0.5f}, {S(kScrollBarW), handle},
+             m_ActiveId == kScrollBarId ? UITheme::Accent : UITheme::AccentDim, {0.0f, 0.0f}, {1.0f, 1.0f}},
+        };
+        m_Renderer.DrawScreenQuadBatch(bar, 2, nullptr);
+    }
 
-    Renderer2D::ScreenQuad bar[2] = {
-        {{barX + S(kScrollBarW) * 0.5f, m_ContentTop + m_ContentH * 0.5f}, {S(kScrollBarW), m_ContentH},
-         UITheme::TrackBg, {0.0f, 0.0f}, {1.0f, 1.0f}},
-        {{barX + S(kScrollBarW) * 0.5f, handleY + handle * 0.5f}, {S(kScrollBarW), handle},
-         m_ActiveId == kScrollBarId ? UITheme::Accent : UITheme::AccentDim, {0.0f, 0.0f}, {1.0f, 1.0f}},
+    if (!m_Tooltip.empty() && atlas) DrawTooltip(textShader, atlas);
+}
+
+void UIPanel::DrawTooltip(Shader* textShader, Texture* atlas) {
+    // Word-wrapped to a readable measure rather than one long strip across
+    // the scene.
+    constexpr size_t kMeasure = 34;
+    std::vector<std::string> lines;
+    std::string line;
+    size_t start = 0;
+    while (start < m_Tooltip.size()) {
+        size_t end = m_Tooltip.find(' ', start);
+        if (end == std::string::npos) end = m_Tooltip.size();
+        const std::string word = m_Tooltip.substr(start, end - start);
+        if (!line.empty() && line.size() + 1 + word.size() > kMeasure) {
+            lines.push_back(line);
+            line.clear();
+        }
+        line += (line.empty() ? "" : " ") + word;
+        start = end + 1;
+    }
+    if (!line.empty()) lines.push_back(line);
+
+    size_t widest = 0;
+    for (const std::string& l : lines) widest = std::max(widest, l.size());
+    const float pad = S(5.0f);
+    const float lineH = Glyph() + S(3.0f);
+    const Vector2 size{static_cast<float>(widest) * Advance() + pad * 2.0f,
+                       static_cast<float>(lines.size()) * lineH - S(3.0f) + pad * 2.0f};
+
+    // Below-right of the cursor, flipped to whichever side keeps it on screen.
+    Vector2 pos{m_Mouse.x + S(14.0f), m_Mouse.y + S(14.0f)};
+    if (pos.x + size.x > static_cast<float>(m_WindowWidth)) pos.x = m_Mouse.x - S(6.0f) - size.x;
+    if (pos.y + size.y > static_cast<float>(m_WindowHeight)) pos.y = m_Mouse.y - S(6.0f) - size.y;
+
+    Renderer2D::ScreenQuad box[2] = {
+        {{pos.x + size.x * 0.5f, pos.y + size.y * 0.5f}, {size.x + S(2.0f), size.y + S(2.0f)},
+         UITheme::AccentDim, {0.0f, 0.0f}, {1.0f, 1.0f}},
+        {{pos.x + size.x * 0.5f, pos.y + size.y * 0.5f}, size, UITheme::TitleBg, {0.0f, 0.0f}, {1.0f, 1.0f}},
     };
-    m_Renderer.DrawScreenQuadBatch(bar, 2, nullptr);
+    m_Renderer.DrawScreenQuadBatch(box, 2, nullptr);
+
+    std::vector<Renderer2D::ScreenQuad> glyphs;
+    float y = pos.y + pad;
+    for (const std::string& l : lines) {
+        float x = pos.x + pad;
+        for (unsigned char c : l) {
+            if (c != ' ') {
+                const Font::GlyphUV uv = m_Font->GetGlyphUV(c);
+                glyphs.push_back({{x + Glyph() * 0.5f, y + Glyph() * 0.5f}, {Glyph(), Glyph()},
+                                  UITheme::Text, uv.offset, uv.scale});
+            }
+            x += Advance();
+        }
+        y += lineH;
+    }
+    m_Renderer.DrawScreenQuadBatch(glyphs.data(), glyphs.size(), textShader, atlas);
 }

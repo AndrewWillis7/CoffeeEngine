@@ -5,6 +5,7 @@
 #include "Gameplay/Camera2D.h"
 #include "Gameplay/LightEmitterConfig.h"
 #include "Gameplay/Terrain/TerrainChunk.h"
+#include "Gameplay/DebugQuadConfig.h"
 #include "Math/Transform2D.h"
 #include "Renderer/Shader.h"
 #include "Renderer/ShaderLibrary.h"
@@ -193,6 +194,19 @@ TerrainChunk* ActorRegistry::CreateTerrainChunk() {
     return raw;
 }
 
+RigidBody2D* ActorRegistry::CreateDebugQuad(float x, float y) {
+    auto config = std::make_unique<DebugQuadConfig>();
+    DebugQuadConfig* rawConfig = config.get();
+    m_DebugQuads.push_back(std::move(config));
+
+    const float size = static_cast<float>(DebugQuadConfig::kCellSize);
+    RigidBody2D* body = CreateRigidBody(x, y, size, size);
+    body->debugQuad = rawConfig;
+    body->sprite = CreateSolidSprite(DebugQuadConfig::kCellSize, DebugQuadConfig::kCellSize, 0.13f, 0.13f, 0.16f, 1.0f);
+    if (body->sprite) GenerateDebugQuadTexture(*body->sprite, rawConfig->cellsX, rawConfig->cellsY);
+    return body;
+}
+
 void ActorRegistry::DumpTree() const {
     std::cout << "ActorRegistry (" << m_Bodies.size() << " bodies)\n";
     for (const auto& body : m_Bodies) {
@@ -249,6 +263,7 @@ void ActorRegistry::Clear() {
     m_Cameras.clear();
     m_LightEmitters.clear();
     m_TerrainChunks.clear();
+    m_DebugQuads.clear();
     m_GeneratedSprites.clear();
 
     // Non-owning and may point into m_GeneratedSprites, just freed above. There is

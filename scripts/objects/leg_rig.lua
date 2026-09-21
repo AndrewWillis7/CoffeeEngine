@@ -262,6 +262,11 @@ function LegRig:InitLegRig(config)
     self.owner     = nil
     self.hipLocalY = 0.0
 
+    -- Re-initialising builds fresh tuning tables, so whatever was exposed
+    -- points at the old ones: the next SetOwner exposes again.
+    self.exposedOn = nil
+    self.lastOX, self.lastOY = nil, nil
+
     self.legs = {}
     local legDefs = config.legs or D.legs
     for i, def in ipairs(legDefs) do
@@ -405,6 +410,7 @@ end
 -- centred on the owner's position, so an odd size puts its edge on a half-texel
 -- and offsets its grid from the torso's, which makes the hip seam crawl.
 function LegRig:BuildCanvases()
+    local previous = self.canvases or {}
     self.canvases = {}
     if #self.legs == 0 then
         self.canvasW, self.canvasH, self.baseHipRow, self.canvasOffY = 0, 0, 0, 0
@@ -470,7 +476,18 @@ function LegRig:BuildCanvases()
     end
 
     for _, layer in ipairs(LAYER_ORDER) do
-        if used[layer] then
+        -- A rebuild (Retune) keeps the bodies it already made, so they hold
+        -- their place in the scene -- and in any saved edit keyed after them --
+        -- and only reallocates a sprite whose size actually changed.
+        local canvas = used[layer] and previous[layer]
+        if canvas then
+            if canvas.sprite:GetWidth() ~= w or canvas.sprite:GetHeight() ~= h then
+                canvas.sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
+                canvas.body:SetSprite(canvas.sprite)
+            end
+            canvas.dirty = true
+            self.canvases[layer] = canvas
+        elseif used[layer] then
             local sprite = Sprite.NewSolid(w, h, 0, 0, 0, 0)
             local body = RigidBody2D.new(0, 0, w, h)
             body:SetName("Leg Canvas (" .. layer .. ")")
@@ -503,11 +520,73 @@ function LegRig:SetOwner(body, hipLocalY)
     -- Integer by construction, which keeps torso and legs on the same grid.
     self.canvasOffY = self.hipLocalY - self.baseHipRow + self.canvasH * 0.5
 
+    -- The canvases are drawn for this body and placed by it every frame, so
+    -- the scene editor selects the owner when they are clicked.
+    for _, canvas in pairs(self.canvases or {}) do
+        canvas.body:SetPartOf(body)
+    end
+
+    self.lastOX, self.lastOY = nil, nil
+    self:Resnap()
+
+    -- Once per body: a Retune re-anchors through here, and re-exposing on
+    -- every rebuild would only churn the references for nothing.
+    if body and self.exposedOn ~= body then
+        self.exposedOn = body
+        self:ExposeTunables(body)
+    end
+end
+
+-- Drops every foot's carried state, so the next UpdateLegs plants it fresh
+-- where the owner now stands. For when the owner arrives somewhere its
+-- velocity can't explain -- see the teleport check at the top of UpdateLegs.
+function LegRig:Resnap()
     for _, leg in ipairs(self.legs) do
-        leg.footX, leg.footY = nil, nil -- re-snap on the next update
+        leg.footX, leg.footY = nil, nil
+        leg.offX, leg.offY = nil, nil
         leg.groundY, leg.lastMode, leg.lastFacing = nil, nil, nil
     end
     self:MarkPoseDirty()
+end
+
+-- Rebuilds what a tuning change bakes in -- the canvases are sized for the
+-- widest stride, tallest bob and deepest crouch the rig can reach -- then
+-- re-anchors them and re-plants the feet. Keeps the same canvas bodies, so it
+-- is safe to run on every frame of an inspector drag.
+function LegRig:Retune()
+    self:BuildCanvases()
+    if self.owner then self:SetOwner(self.owner, self.hipLocalY) end
+end
+
+-- The gait constants, offered to the scene editor's inspector on the owner's
+-- body (see RigidBody2D:Expose), so they can be tuned against walk speed live
+-- and saved into the scene. Anything baked into the canvas sizes rebuilds
+-- them; the rest is read fresh every frame and needs nothing.
+function LegRig:ExposeTunables(body)
+    local rig = self
+    local function rebuild() rig:Retune() end
+
+    body:Expose("gait.stride", self, "stride", { min = 2, max = 96, step = 0.1, onChange = rebuild })
+    body:Expose("gait.stanceRatio", self, "stanceRatio", { min = 0.05, max = 0.95, step = 0.002, onChange = rebuild })
+    body:Expose("gait.stepHeight", self, "stepHeight", { min = 0, max = 12, step = 0.02 })
+    body:Expose("gait.swingFrames", self, "swingFrames", { min = 0, max = 12, integer = true })
+    body:Expose("gait.bob", self, "bob", { min = 0, max = 4, integer = true, onChange = rebuild })
+    body:Expose("gait.idleSpeed", self, "idleSpeed", { min = 0, max = 100, step = 0.1 })
+    body:Expose("gait.blendRate", self, "gaitBlendRate", { min = 0.5, max = 40, step = 0.05 })
+    body:Expose("gait.smoothing", self, "smoothing", { min = 1, max = 60, step = 0.1 })
+    body:Expose("gait.lean", self, "leanMax", { min = 0, max = 6, integer = true, onChange = rebuild })
+    body:Expose("gait.leanSpeed", self, "leanSpeed", { min = 1, max = 200, step = 0.25 })
+    body:Expose("gait.landDip", self, "landDip", { min = 0, max = 6, step = 0.02 })
+    body:Expose("gait.loadDip", self, "loadDip", { min = 0, max = 4, step = 0.02 })
+
+    body:Expose("sprint.stride", self.sprintTuning, "strideScale", { min = 0.25, max = 3, step = 0.005, onChange = rebuild })
+    body:Expose("sprint.stepHeight", self.sprintTuning, "stepHeightScale", { min = 0, max = 3, step = 0.005 })
+    body:Expose("crouch.stride", self.crouchTuning, "strideScale", { min = 0.1, max = 2, step = 0.005 })
+    body:Expose("crouch.stepHeight", self.crouchTuning, "stepHeightScale", { min = 0, max = 2, step = 0.005 })
+    body:Expose("crouch.sink", self.crouchTuning, "sink", { min = 0, max = 8, integer = true, onChange = rebuild })
+
+    body:Expose("air.tuck", self, "airTuck", { min = 0.25, max = 1, step = 0.002 })
+    body:Expose("air.reach", self, "airReach", { min = 0.5, max = 1, step = 0.001 })
 end
 
 function LegRig:GetStandHeight() return self.standHeight or 0 end
@@ -561,6 +640,25 @@ function LegRig:UpdateLegs(dt)
     local vx, vy = self.owner:GetVelocity()
     local grounded = self.owner:IsGrounded()
     local speed = abs(vx)
+
+    -- Teleport check. Everything the rig carries between frames -- the ground
+    -- height a foot stands on, the offsets easing a foot across a step or a
+    -- turn -- decays over TIME, which assumes the owner got here by moving. A
+    -- body put somewhere outright (a respawn, or the scene editor dragging it
+    -- while the clock is held at zero) leaves that state describing ground it
+    -- is no longer over, and with no time passing it never decays: the legs
+    -- stretch back toward where the body was. So motion its velocity can't
+    -- account for -- all of it, at dt 0 -- re-plants every foot where the body
+    -- now is. A collision push-out, like climbing a step, stays well inside a
+    -- leg length and keeps its eased transition.
+    if self.lastOX then
+        local moved = max(abs(ox - self.lastOX), abs(oy - self.lastOY))
+        local explained = (abs(vx) + abs(vy)) * dt
+        if (dt <= 0 and moved > 1e-4) or moved > explained + self.legLength then
+            self:Resnap()
+        end
+    end
+    self.lastOX, self.lastOY = ox, oy
 
     local prevFacing = self.facing
     self:SetFacing(speed > self.idleSpeed and vx or nil)

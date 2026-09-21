@@ -28,7 +28,12 @@ class Font;
 // last frame's content height, rather than at the end of the frame.
 class UIPanel {
 public:
-    UIPanel(ActorRegistry& actors, Renderer2D& renderer, UserInputService& input);
+    // Which edge NewFrame() docks the panel against. Fixed for the panel's
+    // lifetime -- set once at construction, not something a caller flips
+    // frame to frame.
+    enum class Anchor { Left, Right };
+
+    UIPanel(ActorRegistry& actors, Renderer2D& renderer, UserInputService& input, Anchor anchor = Anchor::Left);
     ~UIPanel();
 
     // One row of a tree or list: an optional color bar down the left edge, an
@@ -70,6 +75,29 @@ public:
                 const Color& accent = UITheme::Accent);
     bool Slider(const std::string& label, float* value, float minValue, float maxValue, int decimals = 2);
     bool SliderInt(const std::string& label, int* value, int minValue, int maxValue);
+
+    // Unbounded numeric field: press and drag sideways, `speed` units per
+    // screen pixel. For values with no natural range -- a world position --
+    // where a Slider would need one invented. The result rounds to `decimals`,
+    // so a position edited at 0 decimals stays on whole texels. minValue <
+    // maxValue clamps; leave them equal for no bounds. labelColor lets a
+    // caller flag the value (the scene editor marks saved edits amber).
+    bool DragFloat(const std::string& label, float* value, float speed, int decimals = 1,
+                   float width = 0.0f, float minValue = 0.0f, float maxValue = 0.0f,
+                   const Color& labelColor = UITheme::TextDim);
+
+    // A value that can be read here but not changed: drawn like a DragFloat
+    // field, dimmed, behind a padlock, and inert. Hovering it shows `reason`,
+    // so a locked row always says why rather than just refusing.
+    void LockedField(const std::string& label, const std::string& value, const std::string& reason,
+                     float width = 0.0f);
+
+    // Text shown in a small box by the cursor, over everything, for this frame
+    // only. Last call wins; widgets call it while hovered.
+    void Tooltip(const std::string& text) { m_Tooltip = text; }
+
+    // The padlock the font carries in an unused control-code slot.
+    static constexpr char kLockGlyph = '\x01';
 
     // Collapsible section bar. Returns *open, so a section body reads as
     // if (panel.Header(...)) { ... }.
@@ -152,6 +180,8 @@ private:
     void PushText(const std::string& text, Vector2 pos, const Color& color, float clipRight);
     void PushTextRight(const std::string& text, float right, float y, const Color& color, float clipLeft);
 
+    void DrawTooltip(Shader* textShader, Texture* atlas);
+
     // Shared by Slider and SliderInt: draws the track, and returns the 0..1
     // position the mouse is asking for, or a negative number when it is not
     // dragging this widget.
@@ -162,6 +192,7 @@ private:
     Renderer2D& m_Renderer;
     UserInputService& m_Input;
     std::unique_ptr<Font> m_Font;
+    Anchor m_Anchor;
 
     float m_Scale = 1.0f;
     float m_X = kMargin, m_Y = kMargin;
@@ -191,6 +222,14 @@ private:
     // ordinal, stable as long as the section list is.
     int m_WidgetCounter = 0;
     int m_ActiveId = 0;
+
+    // DragFloat measures from where the press landed rather than frame to
+    // frame, so a drag slower than the rounding step still gets somewhere.
+    float m_DragAnchorX = 0.0f;
+    float m_DragStartValue = 0.0f;
+
+    std::string m_Tooltip;
+
     static constexpr int kScrollBarId = -1;
     static constexpr int kResizeId = -2;
 

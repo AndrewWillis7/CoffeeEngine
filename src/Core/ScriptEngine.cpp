@@ -85,6 +85,29 @@ void ScriptEngine::Init(const std::string& scriptPath, EngineContext& context) {
 
     CallIfExists(m_Lua, "Init", 0);
     KeyMap::SyncFromLua(m_Lua);
+
+    if (m_OnLoaded) m_OnLoaded();
+}
+
+bool ScriptEngine::CallSpawn(const std::string& fnName, float x, float y, const std::string& name) {
+    if (!m_Lua) return false;
+
+    lua_getglobal(m_Lua, fnName.c_str());
+    if (!lua_isfunction(m_Lua, -1)) {
+        lua_pop(m_Lua, 1);
+        std::cerr << "Engine Warning: no Lua function '" << fnName << "' to spawn '" << name << "' with\n";
+        return false;
+    }
+
+    lua_pushnumber(m_Lua, x);
+    lua_pushnumber(m_Lua, y);
+    lua_pushstring(m_Lua, name.c_str());
+    if (lua_pcall(m_Lua, 3, 0, 0) != LUA_OK) {
+        std::cerr << "Engine Warning: Lua error in " << fnName << "(): " << lua_tostring(m_Lua, -1) << "\n";
+        lua_pop(m_Lua, 1);
+        return false;
+    }
+    return true;
 }
 
 void ScriptEngine::Update(float deltaTime) {

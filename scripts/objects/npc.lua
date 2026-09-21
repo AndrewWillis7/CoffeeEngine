@@ -18,6 +18,14 @@ function NPC.new(x, y, w, h, legConfig, torsoConfig)
 
     self.walkDir = 0
     self.holdTime = 0
+
+    -- Per instance, so two NPCs can be tuned apart in the scene editor. The
+    -- class constants are only where each one starts.
+    self.walkSpeed = NPC.WALK_SPEED
+    self.minHold, self.maxHold = NPC.MIN_HOLD, NPC.MAX_HOLD
+    self.body:Expose("ai.walkSpeed", self, "walkSpeed", { min = 0, max = 200, step = 0.25 })
+    self.body:Expose("ai.minHold", self, "minHold", { min = 0.1, max = 20, step = 0.02 })
+    self.body:Expose("ai.maxHold", self, "maxHold", { min = 0.1, max = 20, step = 0.02 })
     return self
 end
 
@@ -25,7 +33,9 @@ end
 function NPC:PickNewDirection()
     local r = math.random(3)
     self.walkDir = (r == 1) and -1 or (r == 2) and 1 or 0
-    self.holdTime = NPC.MIN_HOLD + math.random() * (NPC.MAX_HOLD - NPC.MIN_HOLD)
+    -- Tolerates the two crossing mid-edit rather than holding for a negative time.
+    local lo, hi = math.min(self.minHold, self.maxHold), math.max(self.minHold, self.maxHold)
+    self.holdTime = lo + math.random() * (hi - lo)
 end
 
 function NPC:HandleInput(deltaTime)
@@ -35,7 +45,7 @@ function NPC:HandleInput(deltaTime)
     end
 
     local _, vy = self.body:GetVelocity()
-    self.body:SetVelocity(self.walkDir * NPC.WALK_SPEED, vy)
+    self.body:SetVelocity(self.walkDir * self.walkSpeed, vy)
 end
 
 return NPC

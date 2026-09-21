@@ -18,6 +18,18 @@ public:
     Vector2 GetHalfExtents() const { return m_HalfExtents; } // Box only
     float GetRadius() const { return m_Radius; }             // Circle only
 
+    // Reshaping in place, for the scene editor: nothing at runtime resizes a
+    // collider, but an editor dragging one around must not have to swap the
+    // pointer every body holds. Sizes clamp at zero; a negative extent would
+    // make every overlap test pass the wrong way round.
+    void SetType(Type type) { m_Type = type; }
+    void SetOffset(const Vector2& offset) { m_Offset = offset; }
+    void SetHalfExtents(const Vector2& halfExtents) {
+        m_HalfExtents = Vector2(halfExtents.x > 0.0f ? halfExtents.x : 0.0f,
+                                halfExtents.y > 0.0f ? halfExtents.y : 0.0f);
+    }
+    void SetRadius(float radius) { m_Radius = radius > 0.0f ? radius : 0.0f; }
+
     // Conservative world-space AABB (a circle's is its bounding square).
     AABB GetWorldAABB(const Transform2D& ownerTransform) const;
 

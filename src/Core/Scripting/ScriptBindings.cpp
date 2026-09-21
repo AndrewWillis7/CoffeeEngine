@@ -198,6 +198,89 @@ int Lua_RigidBody2DGetName(lua_State* L) {
     return 1;
 }
 
+// body:SetPartOf(owner) -- marks this body as drawn on owner's behalf (see
+// RigidBody2D::partOf). nil clears it.
+int Lua_RigidBody2DSetPartOf(lua_State* L) {
+    RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
+    self->partOf = lua_isnoneornil(L, 2) ? nullptr : LuaBinding::Value<RigidBody2D*>::Get(L, 2);
+    if (self->partOf == self) self->partOf = nullptr;
+    return 0;
+}
+
+int Lua_RigidBody2DGetPartOf(lua_State* L) {
+    LuaBinding::Value<RigidBody2D*>::Push(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->partOf);
+    return 1;
+}
+
+float OptField(lua_State* L, int table, const char* key, float fallback) {
+    lua_getfield(L, table, key);
+    const float value = lua_type(L, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, -1)) : fallback;
+    lua_pop(L, 1);
+    return value;
+}
+
+// body:Expose(name, table, key [, opts]) -- offers table[key] to the scene
+// editor's inspector (see ScriptTunable). opts: min, max, step, decimals,
+// integer (true for whole numbers), onChange (function(table), run after
+// every edit -- for a value baked into something that has to be rebuilt).
+// A boolean there makes it a toggle. Exposing a name again replaces it, so a
+// rebuild can simply re-expose.
+int Lua_RigidBody2DExpose(lua_State* L) {
+    RigidBody2D* self = LuaBinding::GetSelf<RigidBody2D>(L, 1);
+    ScriptTunable tunable;
+    tunable.name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    tunable.key = luaL_checkstring(L, 4);
+
+    lua_getfield(L, 3, tunable.key.c_str());
+    const int valueType = lua_type(L, -1);
+    lua_pop(L, 1);
+    if (valueType == LUA_TBOOLEAN) {
+        tunable.kind = ScriptTunable::Kind::Bool;
+    } else if (valueType != LUA_TNUMBER) {
+        return luaL_error(L, "Expose('%s'): table.%s holds a %s, not a number or boolean",
+                          tunable.name.c_str(), tunable.key.c_str(), lua_typename(L, valueType));
+    }
+
+    if (lua_istable(L, 5)) {
+        tunable.minValue = OptField(L, 5, "min", 0.0f);
+        tunable.maxValue = OptField(L, 5, "max", 0.0f);
+        tunable.step = OptField(L, 5, "step", 0.0f);
+        tunable.decimals = static_cast<int>(OptField(L, 5, "decimals", 2.0f));
+        lua_getfield(L, 5, "integer");
+        if (lua_toboolean(L, -1) && tunable.kind == ScriptTunable::Kind::Number) {
+            tunable.kind = ScriptTunable::Kind::Integer;
+            tunable.decimals = 0;
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 5, "onChange");
+        if (lua_isfunction(L, -1)) tunable.onChangeRef = luaL_ref(L, LUA_REGISTRYINDEX);
+        else lua_pop(L, 1);
+    }
+
+    // The main thread, not L: called from a coroutine, L is that coroutine,
+    // which may be collected long before the editor next reads this.
+    lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+    tunable.L = lua_tothread(L, -1);
+    lua_pop(L, 1);
+
+    lua_pushvalue(L, 3);
+    tunable.tableRef = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    for (ScriptTunable& existing : self->tunables) {
+        if (existing.name == tunable.name) {
+            // Released, not leaked: a rig that re-exposes on every rebuild
+            // would otherwise pile references into the registry for good.
+            luaL_unref(L, LUA_REGISTRYINDEX, existing.tableRef);
+            luaL_unref(L, LUA_REGISTRYINDEX, existing.onChangeRef);
+            existing = tunable;
+            return 0;
+        }
+    }
+    self->tunables.push_back(tunable);
+    return 0;
+}
+
 int Lua_RigidBody2DIsPlayer(lua_State* L) {
     lua_pushboolean(L, LuaBinding::GetSelf<RigidBody2D>(L, 1)->playerConfig != nullptr);
     return 1;
@@ -230,6 +313,9 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .Raw("SetName", &Lua_RigidBody2DSetName)
         .Raw("GetName", &Lua_RigidBody2DGetName)
         .Raw("IsPlayer", &Lua_RigidBody2DIsPlayer)
+        .Raw("SetPartOf", &Lua_RigidBody2DSetPartOf)
+        .Raw("GetPartOf", &Lua_RigidBody2DGetPartOf)
+        .Raw("Expose", &Lua_RigidBody2DExpose)
         .Raw("GetSprite", &Lua_RigidBody2DGetSprite)
         .Raw("SetSprite", &Lua_RigidBody2DSetSprite)
         .Vec2Property<&RigidBody2D::velocity>("GetVelocity", "SetVelocity")
@@ -245,6 +331,7 @@ void RegisterRigidBody2D(lua_State* L, ActorRegistry* actors) {
         .PtrProperty<&RigidBody2D::terrain>("GetTerrain", "SetTerrain")
         .Property<&RigidBody2D::lightBlocking>("IsLightBlocking", "SetLightBlocking")
         .Property<&RigidBody2D::raycastTarget>("IsRaycastTarget", "SetRaycastTarget")
+        .Property<&RigidBody2D::destroyed>("IsDestroyed", "SetDestroyed")
         .Method<&RigidBody2D::AddForce>("AddForce")
         .Method<&RigidBody2D::Integrate>("Integrate")
         .Method<&RigidBody2D::IsGrounded>("IsGrounded")
@@ -822,6 +909,7 @@ void RegisterActorRegistry(lua_State* L, ActorRegistry* actors) {
         .Function<&ActorRegistry::SetBorderSprite>("SetBorderSprite", actors)
         .Function<&ActorRegistry::GetBorderSprite>("GetBorderSprite", actors)
         .Function<&ActorRegistry::DumpTree>("Dump", actors)
+        .Function<&ActorRegistry::CreateDebugQuad>("CreateDebugQuad", actors)
         .Finish("Actors");
 }
 

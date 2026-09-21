@@ -138,7 +138,7 @@ void LightingSystem::Update(ActorRegistry& actors, float deltaTime) {
     m_Lights.clear();
     for (const auto& bodyPtr : bodies) {
         RigidBody2D* body = bodyPtr.get();
-        if (body->lightEmitter) m_Lights.push_back({body, body->lightEmitter});
+        if (body->lightEmitter && !body->destroyed) m_Lights.push_back({body, body->lightEmitter});
     }
 
     // Pass 1: erase what LAST frame's lights touched, before this frame

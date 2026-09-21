@@ -277,6 +277,15 @@ which is handled automatically in BuildCanvases.
       EXACTLY; only the leftover offset decays, and ground height gets
       its own smoothing so a step up eases in.
 
+      Both decays run on dt, so neither can resolve a body that was PUT
+      somewhere rather than moved there -- a respawn, or the scene editor
+      dragging the owner while it holds the clock at zero. UpdateLegs
+      treats any owner motion its velocity can't explain (all of it, at
+      dt 0; more than a leg length otherwise) as a teleport and calls
+      Resnap(), which drops the carried state so every foot is planted
+      fresh where the body now is. A step-up push-out is far under a leg
+      length, so it still eases.
+
   snapDistance = 6
       How far BELOW full extension to keep searching for ground. Lets a
       foot reach into a dip instead of dangling over it; beyond this the

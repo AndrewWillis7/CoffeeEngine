@@ -5,6 +5,9 @@ local Campfire = require("objects.campfire")
 local Spotlight = require("objects.spotlight")
 local Constants = require("core.constants")
 local Terrain = require("objects.terrain")
+-- Defines SpawnNPCAt/SpawnRectangleAt/UpdateSpawnedAssets/DrawSpawnedAssets,
+-- the scene editor's Asset Menu calls into by name (see the module itself).
+require("core.spawn_registry")
 
 function Init()
     print("Engine Initialized")
@@ -112,6 +115,7 @@ function Update(deltaTime)
     -- level-bounds concept instead of reusing the camera's resolution.
     player:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
     npc:Update(deltaTime, solids, Constants.RESOLUTION_WIDTH, Constants.RESOLUTION_HEIGHT)
+    UpdateSpawnedAssets(deltaTime)
 
     -- Camera reacts AFTER gameplay has moved, so it chases this frame's position,
     -- then is pushed to the renderer once rather than once per DrawBody().
@@ -131,4 +135,5 @@ function Update(deltaTime)
     player:Draw()
     npc:Draw()
     campfire:Draw()
+    DrawSpawnedAssets()
 end

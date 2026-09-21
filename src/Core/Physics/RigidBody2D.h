@@ -1,17 +1,20 @@
 #pragma once
 #include <cmath>
 #include <string>
+#include <vector>
 #include "../Math/Vector2.h"
 #include "../Math/Transform2D.h"
 #include "../Math/Color.h"
 #include "CollisionShape2D.h"
 #include "../Gameplay/Camera2D.h"
+#include "../Scripting/ScriptTunable.h"
 
 class Shader;
 class PlayerActorConfig;
 class PixelSprite;
 class LightEmitterConfig;
 class TerrainChunk;
+class DebugQuadConfig;
 
 // Minimal linear-motion body: velocity + accumulated force, integrated with
 // semi-implicit Euler. Collision response is positional only -- no bounce.
@@ -35,6 +38,10 @@ public:
     PixelSprite* sprite = nullptr;
     LightEmitterConfig* lightEmitter = nullptr;
 
+    // Marks this body as an editor-placed procedural grid quad (see
+    // DebugQuadConfig). Owned by ActorRegistry like the capability tags above.
+    DebugQuadConfig* debugQuad = nullptr;
+
     // A terrain body deliberately has no collisionShape: its surface is a
     // heightmap, so it resolves through TerrainChunk::ResolveBody (which routes
     // back into ApplyCollisionCorrection). A box on top would be a flat lid
@@ -44,6 +51,27 @@ public:
     // Stops LightingSystem's raymarch at this body's first solid pixel. Only
     // affects other lights' rays passing through, never this body's own glow.
     bool lightBlocking = false;
+
+    // Editor-facing, like `name`: nothing at runtime reads either of these.
+    //
+    // partOf marks a body drawn on another's behalf -- a leg canvas, a coat --
+    // and names that owner. The scene editor picks the owner when the part is
+    // clicked, and locks the part's own transform, which the owner's script
+    // overwrites every frame anyway. Non-owning; both bodies live in the same
+    // registry pool and are freed together on reload.
+    RigidBody2D* partOf = nullptr;
+
+    // Set by the scene editor's "Delete asset" button on an editor-placed
+    // object (see SceneEditor). The body itself is never freed mid-session --
+    // ActorRegistry's pools only ever grow until the next reload -- so every
+    // system that iterates bodies for gameplay effect (lighting, raycasting,
+    // picking) skips one flagged destroyed, and the Lua-side spawn registry
+    // drops it from whatever list was calling DrawBody()/Update() on it.
+    bool destroyed = false;
+
+    // Lua values this body's scripts offered to the inspector with
+    // body:Expose(). See ScriptTunable.
+    std::vector<ScriptTunable> tunables;
 
     // Whether Physics.RaycastDown can hit this body. Only consulted when terrain
     // or a collisionShape is attached, so the default means "if you can collide

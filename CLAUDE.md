@@ -55,6 +55,15 @@ The `IK` table (near the bottom of `ScriptBindings.cpp`) is the odd one out: pur
 - `scripts/api/coffee_api.lua` — reference/annotation stub of the full Lua API surface exposed by the engine (used by the Lua language server via `.luarc.json`'s `workspace.library`), not code that runs.
 - `ScriptEngine::Init` prepends `scripts/?.lua;scripts/?/init.lua` to Lua's `package.path`, so `require("objects.player")` resolves to `scripts/objects/player.lua` — all game modules are required relative to `scripts/`, not the repo root.
 
+### Scene editor and `.scene` files (`src/Core/Engine/`)
+
+The debug menu's edit mode (backtick, then F2) moves, rotates, scales and re-shapes objects and edits their constants, and those edits **persist**: `SceneOverrides` saves them to `<entry script>.scene` (`scripts/main.scene`) and re-applies them after every script `Init()` â€” startup, F5 reload, every run â€” via `ScriptEngine::SetOnLoaded`. So an object's live value is the script's value *unless* that file overrides it; check the file before assuming `main.lua` is the whole story. Objects are keyed by `SetName` name plus creation order among same-named bodies (`[Wall#0]`), so reordering creation in the scripts can retarget an edit.
+
+- `SceneFields.cpp` is the single table of editable fields (key, type, get/set, inspector hints). Adding an entry makes a field editable, undoable and persisted â€” nothing else needs touching.
+- `SceneEditor` records edits by snapshotting a body's fields before and after its own code runs (gizmo drag, inspector widget, button) and diffing, so new tools are persisted for free. Freecam is `Renderer2D::SetViewOverride`, which never touches the game's camera body.
+- Lua constants reach the inspector through `body:Expose(name, table, key, opts)` (a `ScriptTunable` on the body; saved as `script.<name>`, re-applied after `Init()`), so gameplay tuning stays in Lua. Give `opts.onChange` for anything baked at construction â€” `LegRig:ExposeTunables` rebuilds its canvases that way.
+- `body:SetPartOf(owner)` marks a body drawn for another (leg/coat canvases): clicking it selects the owner, and its transform shows locked. Any new sub-body a script positions every frame should declare it.
+
 ### Coordinate/units conventions worth knowing
 
 - +Y is down (see `Vector2.h`).

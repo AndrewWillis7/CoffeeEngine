@@ -66,4 +66,13 @@ namespace UITheme {
     inline constexpr Color GizmoVelocity {1.00f, 0.92f, 0.30f, 0.90f};
     inline constexpr Color GizmoSurface  {0.95f, 0.45f, 0.85f, 0.85f};
     inline constexpr Color GizmoSelected {1.00f, 1.00f, 1.00f, 0.95f};
+
+    // Scene editor handles. Axis colors follow the usual editor convention,
+    // X red and Y green, so a move arrow reads without a label.
+    inline constexpr Color EditAxisX  {0.95f, 0.38f, 0.38f, 1.0f};
+    inline constexpr Color EditAxisY  {0.42f, 0.84f, 0.48f, 1.0f};
+    inline constexpr Color EditHandle {1.00f, 1.00f, 1.00f, 0.95f};
+    inline constexpr Color EditHover  {0.28f, 0.62f, 0.98f, 0.75f};
+    inline constexpr Color EditRing   {0.28f, 0.62f, 0.98f, 0.90f};
+    inline constexpr Color EditHudBg  {0.055f, 0.060f, 0.075f, 0.88f};
 }

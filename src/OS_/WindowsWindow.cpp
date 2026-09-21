@@ -146,6 +146,10 @@ LRESULT WindowsWindow::HandleMessage(
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN: {
+            // Keeps the button-up coming even if the cursor leaves the client
+            // area mid-drag; without it a drag released outside the window
+            // never ends, and whatever was being dragged stays glued to it.
+            SetCapture(m_Hwnd);
             if (m_EventCallback) {
                 WindowEvent e{WindowEvent::Type::MouseButtonPressed};
                 e.button = static_cast<int>(msg == WM_LBUTTONDOWN ? MouseButton::Left
@@ -160,6 +164,7 @@ LRESULT WindowsWindow::HandleMessage(
         case WM_LBUTTONUP:
         case WM_RBUTTONUP:
         case WM_MBUTTONUP: {
+            if (!(wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON))) ReleaseCapture();
             if (m_EventCallback) {
                 WindowEvent e{WindowEvent::Type::MouseButtonReleased};
                 e.button = static_cast<int>(msg == WM_LBUTTONUP ? MouseButton::Left

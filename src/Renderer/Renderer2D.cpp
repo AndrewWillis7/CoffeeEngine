@@ -117,21 +117,27 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
                                   const Vector2& targetAspect, Shader* borderShader,
                                   Texture* borderTexture) {
     m_HasCamera = true;
-    m_CameraPos = position;
     // The vertex shader divides by this, so a zero from an unset Camera2D would
     // NaN out every world draw for the rest of the frame, not just this camera.
-    m_CameraViewport = Vector2(
+    const Vector2 cameraViewport(
         viewportSize.x > 0.0f ? viewportSize.x : 1.0f,
         viewportSize.y > 0.0f ? viewportSize.y : 1.0f);
+
+    // Free look swaps the centre and scales how much world the rect holds, but
+    // everything below still fits against the game camera's own viewport. The
+    // zoom is uniform, so the aspect -- and with it the letterbox and the
+    // border's pixel grain -- stays exactly where the game left it.
+    m_CameraPos = m_HasViewOverride ? m_ViewOverridePos : position;
+    m_CameraViewport = m_HasViewOverride ? cameraViewport * m_ViewOverrideZoom : cameraViewport;
 
     // Nested aspect-fit. With targetAspect unset both steps use the same aspect,
     // so the second fit fills the first rect exactly -- one formula for both the
     // "fit to window" and "fit inside a specific shape" cases.
     bool hasTargetAspect = targetAspect.x > 0.0f && targetAspect.y > 0.0f;
-    Vector2 aspectBasis = hasTargetAspect ? targetAspect : m_CameraViewport;
+    Vector2 aspectBasis = hasTargetAspect ? targetAspect : cameraViewport;
 
     FitRect outer = FitAspect(m_Width, m_Height, aspectBasis.x, aspectBasis.y);
-    FitRect inner = FitAspect(outer.w, outer.h, m_CameraViewport.x * m_PixelScale, m_CameraViewport.y * m_PixelScale);
+    FitRect inner = FitAspect(outer.w, outer.h, cameraViewport.x * m_PixelScale, cameraViewport.y * m_PixelScale);
 
     m_ContentX = outer.x + inner.x;
     m_ContentY = outer.y + inner.y;
@@ -146,7 +152,7 @@ void Renderer2D::SetActiveCamera(const Vector2& position, const Vector2& viewpor
         // FitAspect only ever applies a uniform scale, so either axis works.
         // m_PixelScale folds in too, or the border's stars and clouds would keep
         // their old grain after a script chunks up the world.
-        float pixelScale = (m_CameraViewport.x > 0.0f ? (inner.w / m_CameraViewport.x) : 1.0f) * m_PixelScale;
+        float pixelScale = (inner.w / cameraViewport.x) * m_PixelScale;
         borderShader->SetFloat("u_PixelScale", pixelScale);
 
         if (borderTexture && borderTexture->IsValid()) {
@@ -165,6 +171,54 @@ void Renderer2D::ClearActiveCamera() {
     EnsureViewport(ViewportMode::FullWindow);
 }
 
+void Renderer2D::SetViewOverride(const Vector2& position, float zoom) {
+    m_HasViewOverride = true;
+    m_ViewOverridePos = position;
+    m_ViewOverrideZoom = zoom > 0.0f ? zoom : 1.0f;
+}
+
+Vector2 Renderer2D::EffectiveWorldViewport() const {
+    const Vector2 viewport = m_HasCamera ? m_CameraViewport : Vector2(m_Width, m_Height);
+    return m_PixelScale != 1.0f ? viewport / m_PixelScale : viewport;
+}
+
+Vector2 Renderer2D::GetViewCenter() const {
+    return m_HasCamera ? m_CameraPos : Vector2(m_Width * 0.5f, m_Height * 0.5f);
+}
+
+// World draws land on the content rect while a camera is active and on the
+// whole window otherwise -- the same split EnsureViewport makes -- and the
+// content rect is centred, so its top edge needs no GL-style Y flip.
+Vector2 Renderer2D::ScreenToWorld(const Vector2& screen) const {
+    const Vector2 view = EffectiveWorldViewport();
+    const Vector2 center = GetViewCenter();
+    const float left = m_HasCamera ? m_ContentX : 0.0f;
+    const float top = m_HasCamera ? m_ContentY : 0.0f;
+    const float width = m_HasCamera ? m_ContentW : m_Width;
+    const float height = m_HasCamera ? m_ContentH : m_Height;
+
+    return {center.x + ((screen.x - left) / width - 0.5f) * view.x,
+            center.y + ((screen.y - top) / height - 0.5f) * view.y};
+}
+
+Vector2 Renderer2D::WorldToScreen(const Vector2& world) const {
+    const Vector2 view = EffectiveWorldViewport();
+    const Vector2 center = GetViewCenter();
+    const float left = m_HasCamera ? m_ContentX : 0.0f;
+    const float top = m_HasCamera ? m_ContentY : 0.0f;
+    const float width = m_HasCamera ? m_ContentW : m_Width;
+    const float height = m_HasCamera ? m_ContentH : m_Height;
+
+    return {left + ((world.x - center.x) / view.x + 0.5f) * width,
+            top + ((world.y - center.y) / view.y + 0.5f) * height};
+}
+
+float Renderer2D::PixelsPerWorldUnit() const {
+    const Vector2 view = EffectiveWorldViewport();
+    const float width = m_HasCamera ? m_ContentW : m_Width;
+    return view.x > 0.0f ? width / view.x : 1.0f;
+}
+
 void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transform, const Vector2& size,
                                       const Color& color, bool world) const {
     // Identity mapping: world pixels 1:1 with screen pixels, origin at the window
@@ -172,15 +226,12 @@ void Renderer2D::ApplyCommonUniforms(Shader& shader, const Transform2D& transfor
     Vector2 cameraPos{m_Width * 0.5f, m_Height * 0.5f};
     Vector2 viewport{m_Width, m_Height};
 
-    if (world && m_HasCamera) {
-        cameraPos = m_CameraPos;
-        viewport = m_CameraViewport;
-    }
-
-    // Shrinking the effective viewport packs the same content rect with fewer
-    // world units, so each draws bigger. World-space only; UI stays crisp.
-    if (world && m_PixelScale != 1.0f) {
-        viewport = viewport / m_PixelScale;
+    // The pixel scale shrinks the effective viewport, packing the same content
+    // rect with fewer world units so each draws bigger. World-space only; UI
+    // stays crisp.
+    if (world) {
+        cameraPos = GetViewCenter();
+        viewport = EffectiveWorldViewport();
     }
 
     // Kept separate from u_ViewportSize (which drives the position math) for

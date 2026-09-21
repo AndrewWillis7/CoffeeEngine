@@ -283,6 +283,9 @@ function Torso:BuildOvershirtCanvas()
     body:SetName("Coat Canvas")
     body:SetSprite(sprite)
     body:SetMass(0)
+    -- Placed from the torso every frame, so the scene editor treats a click
+    -- on the coat as a click on the character wearing it.
+    body:SetPartOf(self.body)
     if body.SetRaycastTarget then body:SetRaycastTarget(false) end
     body:SetColor(1.0, 1.0, 1.0, 1.0)
     self.coatCanvas = { sprite = sprite, body = body, dirty = true }

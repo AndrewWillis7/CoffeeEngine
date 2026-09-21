@@ -88,7 +88,9 @@ EngineUIController::EngineUIController(ActorRegistry& actors, Renderer2D& render
                                        const LightingSystem& lighting, const TerrainSystem& terrain)
     : m_Actors(actors), m_Renderer(renderer), m_Input(input), m_Scripts(scripts), m_Window(window),
       m_Lighting(lighting), m_Terrain(terrain),
-      m_Panel(std::make_unique<UIPanel>(actors, renderer, input)) {
+      m_Panel(std::make_unique<UIPanel>(actors, renderer, input)),
+      m_AssetMenu(std::make_unique<UIPanel>(actors, renderer, input, UIPanel::Anchor::Right)),
+      m_Editor(actors, renderer, input, scripts, m_Explorer) {
 
     m_Keys.toggle = KeyMap::Get("Backtick");
     if (m_Keys.toggle == 0) {
@@ -100,20 +102,33 @@ EngineUIController::EngineUIController(ActorRegistry& actors, Renderer2D& render
     m_Keys.step     = KeyMap::Get("F7");
     m_Keys.overlays = KeyMap::Get("F8");
     m_Keys.uiScale  = KeyMap::Get("F9");
+    // F2, not F10: Windows sends F10 as WM_SYSKEYDOWN, the menu-bar key, which
+    // never reaches the engine's key events.
+    m_Keys.editor   = KeyMap::Get("F2");
 
     // Big windows get the 2x glyph grid, so the panel is legible on a 4K display
     // without anyone having to find the toggle first.
-    if (window.GetHeight() >= 1100) m_Panel->SetUIScale(2.0f);
+    if (window.GetHeight() >= 1100) {
+        m_Panel->SetUIScale(2.0f);
+        m_AssetMenu->SetUIScale(2.0f);
+    }
+
+    // The scripts have already built the scene by the time the menu exists,
+    // so the saved edits go on now, and again after every load from here on.
+    m_Scripts.SetOnLoaded([this] { m_Editor.OnSceneLoaded(); });
+    m_Editor.OnSceneLoaded();
 }
 
-EngineUIController::~EngineUIController() = default;
+EngineUIController::~EngineUIController() {
+    m_Scripts.SetOnLoaded(nullptr);
+}
 
 bool EngineUIController::Pressed(int keycode) const {
     return keycode != 0 && m_Input.IsKeyPressed(keycode);
 }
 
 bool EngineUIController::WantsMouse() const {
-    return m_Open && m_Panel->WantsMouse();
+    return m_Open && (m_Panel->WantsMouse() || (m_Editor.IsActive() && m_AssetMenu->WantsMouse()));
 }
 
 float EngineUIController::BeginFrame(float realDeltaTime) {
@@ -121,6 +136,14 @@ float EngineUIController::BeginFrame(float realDeltaTime) {
     m_RealTime += realDeltaTime;
 
     if (Pressed(m_Keys.toggle)) m_Open = !m_Open;
+    if (Pressed(m_Keys.editor)) {
+        const bool entering = !m_Editor.IsActive();
+        if (entering) m_Open = true;
+        m_Editor.SetActive(entering);
+    }
+    // The editor lives inside the menu: shutting the menu leaves edit mode, so
+    // a hidden editor can never be holding the camera and the controls.
+    if (!m_Open && m_Editor.IsActive()) m_Editor.SetActive(false);
     if (Pressed(m_Keys.reload)) m_ReloadRequested = true;
     if (Pressed(m_Keys.pause)) m_Paused = !m_Paused;
     if (Pressed(m_Keys.step)) {
@@ -140,8 +163,11 @@ float EngineUIController::BeginFrame(float realDeltaTime) {
                                   : DebugOverlay::Options{true, true, true, true, true};
     }
 
+    m_Editor.BeginFrame(realDeltaTime, WantsMouse(), m_Panel->GetUIScale());
+
+    // Editing holds the clock like a pause does, and F7 still steps through it.
     float simDelta = realDeltaTime * m_TimeScale;
-    if (m_Paused) {
+    if (m_Paused || m_Editor.FreezesSimulation()) {
         simDelta = m_StepRequested ? realDeltaTime * m_TimeScale : 0.0f;
         m_StepRequested = false;
     }
@@ -151,6 +177,8 @@ float EngineUIController::BeginFrame(float realDeltaTime) {
 }
 
 void EngineUIController::Update(int windowWidth, int windowHeight) {
+    m_Editor.AfterScripts();
+
     if (!m_Open) {
         // A reload asked for by hotkey still has to happen with the menu shut.
         if (m_ReloadRequested) {
@@ -160,13 +188,20 @@ void EngineUIController::Update(int windowWidth, int windowHeight) {
         return;
     }
 
+    DrawAssetMenu(windowWidth, windowHeight);
+
     UIPanel& panel = *m_Panel;
     panel.NewFrame(windowWidth, windowHeight);
 
     const float fps = m_Stats.Fps();
-    panel.TitleBar("CoffeeEngine", Num(fps, 0) + " fps", GradeMs(m_Stats.AverageMs()));
+    if (m_Editor.IsActive()) {
+        panel.TitleBar("CoffeeEngine", "EDIT  " + Num(fps, 0) + " fps", UITheme::Warn);
+    } else {
+        panel.TitleBar("CoffeeEngine", Num(fps, 0) + " fps", GradeMs(m_Stats.AverageMs()));
+    }
 
     SectionPerformance(panel);
+    SectionEditor(panel);
     SectionExplorer(panel);
     SectionInspector(panel);
     SectionTime(panel);
@@ -176,6 +211,7 @@ void EngineUIController::Update(int windowWidth, int windowHeight) {
     SectionLog(panel);
     SectionHelp(panel);
 
+    if (m_Editor.TakeReloadRequest()) m_ReloadRequested = true;
     if (m_ReloadRequested) {
         m_ReloadRequested = false;
         m_Scripts.Reload();
@@ -188,8 +224,33 @@ void EngineUIController::Draw() {
     // World gizmos first so the panel covers them rather than the other way
     // round. Selection is revalidated here, not cached, because the reload at
     // the end of Update() can have freed the body since it was picked.
-    m_Overlay.Draw(m_Renderer, m_Actors, m_Explorer.Selected(m_Actors), m_RealTime);
+    // The editor draws its own selection, so the overlay's pulse stands down.
+    m_Overlay.Draw(m_Renderer, m_Actors, m_Editor.IsActive() ? nullptr : m_Explorer.Selected(m_Actors), m_RealTime);
+    m_Editor.DrawWorld();
     m_Panel->Draw();
+    if (m_Editor.IsActive()) m_AssetMenu->Draw();
+}
+
+void EngineUIController::DrawAssetMenu(int windowWidth, int windowHeight) {
+    if (!m_Editor.IsActive()) return;
+
+    UIPanel& menu = *m_AssetMenu;
+    menu.NewFrame(windowWidth, windowHeight);
+    menu.TitleBar("Asset Menu", "", UITheme::Accent);
+
+    menu.Label("Click a button, then click in the", UITheme::TextFaint);
+    menu.Label("world to place it there.", UITheme::TextFaint);
+    menu.Spacing();
+
+    if (menu.Button("Light")) m_Editor.ArmPlacement(SceneEditor::AssetType::Light);
+    if (menu.Button("Rectangle")) m_Editor.ArmPlacement(SceneEditor::AssetType::Rectangle);
+    if (menu.Button("Character")) m_Editor.ArmPlacement(SceneEditor::AssetType::Character);
+
+    if (m_Editor.HasPendingPlacement()) {
+        menu.Spacing();
+        menu.Label("Click in the world to place it.", UITheme::Warn);
+        menu.Label("Esc cancels.", UITheme::TextFaint);
+    }
 }
 
 // --- Sections ---------------------------------------------------------------
@@ -225,6 +286,12 @@ void EngineUIController::SectionPerformance(UIPanel& panel) {
     panel.Spacing();
 }
 
+void EngineUIController::SectionEditor(UIPanel& panel) {
+    if (!panel.Header("Scene Editor", &m_ShowEditor, m_Editor.Summary())) return;
+    m_Editor.DrawControls(panel);
+    panel.Spacing();
+}
+
 void EngineUIController::SectionExplorer(UIPanel& panel) {
     const size_t bodies = m_Actors.GetBodyCount();
     if (!panel.Header("Scene Explorer", &m_ShowExplorer, Count(bodies) + " bodies")) return;
@@ -235,12 +302,22 @@ void EngineUIController::SectionExplorer(UIPanel& panel) {
 void EngineUIController::SectionInspector(UIPanel& panel) {
     const RigidBody2D* selected = m_Explorer.Selected(m_Actors);
     if (!panel.Header("Inspector", &m_ShowInspector, selected ? "1 selected" : "none")) return;
-    m_Explorer.DrawInspector(panel, m_Actors);
+
+    // In edit mode the inspector is the editor's: every field, and every change
+    // saved. Outside it, the live-tweak view, whose changes last until reload.
+    if (m_Editor.IsActive()) {
+        m_Editor.DrawProperties(panel);
+    } else {
+        panel.Label("Live only -- F2 edits and saves.", UITheme::TextFaint);
+        m_Explorer.DrawInspector(panel, m_Actors);
+    }
     panel.Spacing();
 }
 
 void EngineUIController::SectionTime(UIPanel& panel) {
-    if (!panel.Header("Time", &m_ShowTime, m_Paused ? "paused" : Num(m_TimeScale, 2) + "x")) return;
+    const std::string timeState = m_Editor.FreezesSimulation() ? "editing"
+                                : m_Paused ? "paused" : Num(m_TimeScale, 2) + "x";
+    if (!panel.Header("Time", &m_ShowTime, timeState)) return;
 
     panel.Toggle("Paused", &m_Paused);
     if (panel.Button("Step", panel.GetWidth() * 0.3f)) {
@@ -358,6 +435,7 @@ void EngineUIController::SectionHelp(UIPanel& panel) {
     if (!panel.Header("Shortcuts", &m_ShowHelp)) return;
 
     panel.KeyValue("`", "open / close this menu");
+    panel.KeyValue("F2", "scene edit mode on / off");
     panel.KeyValue("F5", "reload Lua scripts");
     panel.KeyValue("F6", "pause / resume");
     panel.KeyValue("F7", "step one frame");
@@ -367,5 +445,19 @@ void EngineUIController::SectionHelp(UIPanel& panel) {
     panel.KeyValue("wheel", "scroll the panel");
     panel.KeyValue("drag right edge", "resize the panel");
     panel.KeyValue("click a row", "select, and gizmo it");
+
+    panel.Separator();
+    panel.Label("In edit mode", UITheme::TextDim);
+    panel.KeyValue("click / drag", "select / move");
+    panel.KeyValue("click again", "select what's below");
+    panel.KeyValue("Q E R C / Tab", "move rotate scale collider");
+    panel.KeyValue("RMB, MMB, WASD", "pan  (Shift: faster)");
+    panel.KeyValue("wheel", "zoom at the cursor");
+    panel.KeyValue("F", "frame the selection");
+    panel.KeyValue("Ctrl (held)", "invert snapping");
+    panel.KeyValue("Shift (scale)", "keep aspect");
+    panel.KeyValue("Ctrl+Z / Ctrl+Y", "undo / redo");
+    panel.KeyValue("Ctrl+S", "save now");
+    panel.KeyValue("Esc", "cancel drag / deselect");
     panel.Spacing();
 }

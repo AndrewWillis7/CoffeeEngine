@@ -1,0 +1,38 @@
+# CoffeeEngine scene edits for scripts/main.lua
+#
+# Written by the Scene Editor in the debug menu. After the scripts' Init()
+# builds the scene, each line below replaces the value the scripts gave that
+# field. [Name#n] is the nth object (from 0, in creation order) the scripts
+# named Name; unnamed objects go by what they are, as [@Light#0]. Keep the
+# scripts creating things in the same order or an edit lands on a different
+# object. '# script:' notes record what the scripts built, for reference
+# only. Delete a line to drop that edit.
+#
+# 'spawn <type> <x> <y> <name>' lines are objects the EDITOR created, not the
+# scripts -- the Asset Menu's placed lights, rectangles and characters. They
+# are recreated at that position before the edits above are applied, so a
+# [name#n] section below can go on to move/resize/restyle them exactly like
+# any scripted object. Delete a spawn line to remove that asset for good.
+spawn Rectangle 18.4049 111.833 Debug Quad
+spawn Character 160.333 104 Placed NPC
+
+[Spotlight (red)#0]
+position = 154 67                         # script: -300 10
+light.coneDirection = 45                  # script: 140
+
+[Player#0]
+position = 111 98                         # script: 118 90
+script.crouch.sink = 5                    # script: 3
+
+[Debug Quad#0]
+position = 175 11                         # script: 18.4049 111.833
+size = 136 96                             # script: 8 8
+collider.enabled = true                   # script: false
+collider.type = box
+collider.offset = 0 0
+collider.halfExtents = 68 48
+quad.cellsX = 17                          # script: 1
+quad.cellsY = 12                          # script: 1
+
+[Placed NPC#0]
+position = 139 117                        # script: 160.333 104
